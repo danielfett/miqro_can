@@ -20,14 +20,20 @@ This software runs on a Raspberry Pi with a CAN bus interface module. You will n
     source venv/bin/activate
     ```
 
-2. Install dependencies from requirements.txt:
+2. Download this software:
+   ```bash
+   git clone https://github.com/danielfett/miqro_can.git
+   cd miqro_can
+   ```
+
+3. Install dependencies from requirements.txt:
     ```bash
     pip3 install -r requirements.txt
     ```
 
-3. Configure the miqro framework as shown below.
+4. Configure the miqro framework as shown below.
 
-3. Run the software:
+5. Run the software:
     ```bash
     python3 -m miqro_can
     ```
