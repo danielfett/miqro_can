@@ -2,7 +2,7 @@
 
 This is a software implementation for reading CAN bus data from Citroen Jumper (tested in a 2020 model) and publishing it to an MQTT broker.
 
-**WARNING: This software must not be used while driving. Use only when the vehicle is stationary.**
+**WARNING: This software must not be used while driving. Use only when the vehicle is stationary. Use at your own risk!**
 
 ## Hardware Requirements
 
