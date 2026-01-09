@@ -6,6 +6,8 @@ from can import CanError
 from collections import deque
 import os
 from time import sleep
+from fuel_tracker import FuelTracker, FuelEntry, FuelType
+from fuel_stats import FuelStatistics
 
 
 class CANService(miqro.Service):
@@ -17,6 +19,10 @@ class CANService(miqro.Service):
 
     SPEED_CAL_ADD = 0
     SPEED_CAL_MULT = 1.01
+    
+    # Fuel tracking configuration
+    FUEL_CSV_PATH = "/var/lib/miqro/fuel_log.csv"
+    FUEL_TYPES_CONFIG = ["Diesel", "HVO100", "Premium Diesel"]
 
     angle_pitch = deque(maxlen=10)
     angle_roll = deque(maxlen=10)
@@ -25,6 +31,11 @@ class CANService(miqro.Service):
     last_ignition_signal_acquired = None
     last_lock_status = {"front": True, "back": True}  # True is locked
     debug = False
+    
+    # Fuel tracking state
+    current_odometer = 0
+    fuel_tracker = None
+    fuel_stats = None
 
     CAN_ATTITUDE_MAX_DELAY = timedelta(seconds=0.2)
     CAN_ACTIVITY_TIMEOUT = timedelta(seconds=3)
@@ -270,6 +281,47 @@ class CANService(miqro.Service):
             device_class="power",
         )
 
+        # Number inputs for liters and cost (Home Assistant MQTT Number)
+        self.input_fuel_liters = ha_sensors.Number(
+            self.device_car,
+            name="Tanken: Liter",
+            state_topic_postfix="fuel/input/liters/state",
+            command_topic_postfix="fuel/input/liters",
+            unit_of_measurement="L",
+        )
+        self.input_fuel_cost = ha_sensors.Number(
+            self.device_car,
+            name="Tanken: Kosten",
+            state_topic_postfix="fuel/input/cost/state",
+            command_topic_postfix="fuel/input/cost",
+            unit_of_measurement="€",
+        )
+
+        # Select for fuel type
+        self.input_fuel_type = ha_sensors.Select(
+            self.device_car,
+            name="Tanken: Kraftstofftyp",
+            state_topic_postfix="fuel/input/fuel_type/state",
+            command_topic_postfix="fuel/input/fuel_type",
+            options=self.FUEL_TYPES_CONFIG,
+        )
+
+        # Binary select for partial/full (use a select to allow HA compatibility)
+        self.input_fuel_partial = ha_sensors.Select(
+            self.device_car,
+            name="Tanken: Teilfüllung",
+            state_topic_postfix="fuel/input/partial/state",
+            command_topic_postfix="fuel/input/partial",
+            options=["no", "yes"],
+        )
+
+        # Button to confirm the entry
+        self.input_fuel_confirm = ha_sensors.Button(
+            self.device_car,
+            name="Tanken: Bestätigen",
+            command_topic_postfix="fuel/input/confirm",
+        )
+
     def handle_door_vehicle_status(self, msg):
         door_status_byte = msg.data[1]
         new_door_status = {
@@ -376,6 +428,10 @@ class CANService(miqro.Service):
         )
         # remember last seen overall kilometers so we can publish it on ignition-off
         self.last_overall_kilometers = overall_kilometers
+        
+        # Track current odometer for fuel statistics
+        self.current_odometer = overall_kilometers
+        
         self.publish(
             "overall_kilometers",
             overall_kilometers,
@@ -534,6 +590,27 @@ class CANService(miqro.Service):
         self._last_stop_published = False
         # track last ignition state to detect transitions (0 or 1)
         self._last_ignition_state = None
+        
+        # Initialize fuel tracking
+        # Check for custom config path in environment or config
+        fuel_csv_path = os.getenv(
+            "MIQRO_FUEL_CSV_PATH",
+            self.config.get("fuel_csv_path", self.FUEL_CSV_PATH)
+        )
+        self.fuel_tracker = FuelTracker(fuel_csv_path)
+        self.fuel_stats = FuelStatistics(self.fuel_tracker)
+        # Pending input values (for HA Number/Select -> confirm flow)
+        self._pending_fuel_liters = None
+        self._pending_fuel_cost = None
+        self._pending_fuel_type = None
+        self._pending_fuel_partial = False
+
+        # Publish HA discovery (via ha_sensors) and initial stats on startup
+        try:
+            # allow a short delay for MQTT connection to establish
+            self.publish_fuel_stats()
+        except Exception:
+            pass
 
     def try_recover(self):
         # ifdown can0 and ifup can0 when the CAN bus is not working
@@ -649,6 +726,204 @@ class CANService(miqro.Service):
     @miqro.handle("debug")
     def handle_debug(self, message):
         self.debug = message in ["1", "true", "on"]
+    
+    @miqro.handle("fuel/refuel")
+    def handle_fuel_refuel(self, message):
+        """Handle refueling event via MQTT.
+        
+        Expected message format (JSON):
+        {
+            "liters": float,
+            "cost": float,
+            "fuel_type": "Diesel" | "HVO100" | "Premium Diesel",
+            "partial": bool (optional, default false)
+        }
+        """
+        try:
+            import json
+            data = json.loads(message)
+            
+            liters = float(data.get("liters"))
+            cost = float(data.get("cost"))
+            fuel_type_str = data.get("fuel_type", "Diesel")
+            partial = data.get("partial", False)
+            
+            if liters <= 0:
+                self.log.error(f"Invalid liters amount: {liters}")
+                self.publish("fuel/refuel/status", "error_invalid_liters")
+                return
+            
+            if cost < 0:
+                self.log.error(f"Invalid cost amount: {cost}")
+                self.publish("fuel/refuel/status", "error_invalid_cost")
+                return
+            
+            # Parse fuel type
+            fuel_type = FuelType.from_string(fuel_type_str)
+            
+            # Create fuel entry with current odometer
+            entry = FuelEntry(
+                odometer=self.current_odometer,
+                liters=liters,
+                cost=cost,
+                fuel_type=fuel_type,
+                partial=partial,
+            )
+            
+            # Store in database
+            self.fuel_tracker.add_entry(entry)
+            self.log.info(
+                f"Fuel refuel recorded: {liters}L of {fuel_type.value} "
+                f"at {self.current_odometer}km (cost: {cost})"
+            )
+            self.publish("fuel/refuel/status", "success")
+
+            # Publish stats immediately after a refuel
+            try:
+                self.publish_fuel_stats()
+            except Exception:
+                pass
+            
+        except json.JSONDecodeError:
+            self.log.error(f"Invalid JSON in fuel refuel message: {message}")
+            self.publish("fuel/refuel/status", "error_invalid_json")
+        except ValueError as e:
+            self.log.error(f"Invalid fuel data: {e}")
+            self.publish("fuel/refuel/status", "error_invalid_data")
+        except Exception as e:
+            self.log.error(f"Error processing fuel refuel: {e}")
+            self.publish("fuel/refuel/status", "error_unknown")
+    
+    def publish_fuel_stats(self):
+        """Calculate fuel statistics and publish them to MQTT (HA-friendly topics).
+
+        This is called on startup and immediately after a refuel.
+        """
+        try:
+            stats = self.fuel_stats.get_statistics_summary(self.current_odometer)
+
+            # Publish basic scalar statistics
+            avg_l = stats.get("average_consumption_l_per_100km")
+            avg_km_per_l = stats.get("average_consumption_km_per_liter")
+            last_leg = stats.get("last_leg_consumption")
+
+            if avg_l is None:
+                self.publish("fuel/stats/average_l_per_100km", "null")
+            else:
+                self.publish("fuel/stats/average_l_per_100km", round(avg_l, 3))
+
+            if avg_km_per_l is None:
+                self.publish("fuel/stats/average_km_per_l", "null")
+            else:
+                self.publish("fuel/stats/average_km_per_l", round(avg_km_per_l, 3))
+
+            if last_leg is None:
+                self.publish("fuel/stats/last_leg_consumption", "null")
+            else:
+                self.publish("fuel/stats/last_leg_consumption", round(last_leg, 3))
+
+            # Publish JSON blobs for per-type values
+            self.publish_json("fuel/stats/consumption_by_type", stats.get("consumption_by_fuel_type", {}))
+            self.publish_json("fuel/stats/cost_per_liter_by_type", stats.get("cost_per_liter_by_type", {}))
+            self.publish_json("fuel/stats/cost_per_km_by_type", stats.get("cost_per_km_by_type", {}))
+
+            # Totals
+            self.publish("fuel/stats/total_entries", stats.get("total_entries", 0))
+            self.publish("fuel/stats/full_refuels", stats.get("full_refuels", 0))
+
+            self.log.info("Fuel statistics published")
+        except Exception as e:
+            self.log.error(f"Error calculating fuel statistics: {e}")
+            self.publish("fuel/stats/error", str(e))
+
+    @miqro.handle("fuel/input/liters")
+    def handle_input_liters(self, message):
+        try:
+            val = float(message)
+            self._pending_fuel_liters = val
+            self.publish("fuel/input/liters/state", val)
+        except Exception:
+            self.log.error(f"Invalid liters input: {message}")
+            self.publish("fuel/input/liters/status", "error")
+
+    @miqro.handle("fuel/input/cost")
+    def handle_input_cost(self, message):
+        try:
+            val = float(message)
+            self._pending_fuel_cost = val
+            self.publish("fuel/input/cost/state", val)
+        except Exception:
+            self.log.error(f"Invalid cost input: {message}")
+            self.publish("fuel/input/cost/status", "error")
+
+    @miqro.handle("fuel/input/fuel_type")
+    def handle_input_fuel_type(self, message):
+        try:
+            # accept plain fuel type string
+            self._pending_fuel_type = message
+            self.publish("fuel/input/fuel_type/state", message)
+        except Exception:
+            self.log.error(f"Invalid fuel type input: {message}")
+            self.publish("fuel/input/fuel_type/status", "error")
+
+    @miqro.handle("fuel/input/partial")
+    def handle_input_partial(self, message):
+        try:
+            val = str(message).lower() in ["1", "true", "yes", "on"]
+            self._pending_fuel_partial = val
+            self.publish("fuel/input/partial/state", str(val))
+        except Exception:
+            self.log.error(f"Invalid partial input: {message}")
+            self.publish("fuel/input/partial/status", "error")
+
+    @miqro.handle("fuel/input/confirm")
+    def handle_input_confirm(self, message):
+        """Confirm and record the pending fuel input values.
+
+        The confirm topic can be triggered by a HA Button (payloads like "PRESS" or "1").
+        """
+        payload = str(message).lower()
+        if payload not in ["1", "press", "press", "p", "on", "confirm"] and payload != "":
+            # Some buttons send an empty payload on press; accept that too
+            pass
+
+        # Validate pending values
+        if self._pending_fuel_liters is None or self._pending_fuel_cost is None:
+            self.log.error("Pending fuel input incomplete; cannot confirm")
+            self.publish("fuel/refuel/status", "error_incomplete_input")
+            return
+
+        fuel_type_str = self._pending_fuel_type or "Diesel"
+        try:
+            fuel_type = FuelType.from_string(fuel_type_str)
+        except Exception:
+            self.log.error(f"Unknown fuel type on confirm: {fuel_type_str}")
+            self.publish("fuel/refuel/status", "error_unknown_fuel_type")
+            return
+
+        entry = FuelEntry(
+            odometer=self.current_odometer,
+            liters=self._pending_fuel_liters,
+            cost=self._pending_fuel_cost,
+            fuel_type=fuel_type,
+            partial=bool(self._pending_fuel_partial),
+        )
+
+        self.fuel_tracker.add_entry(entry)
+        self.log.info(f"Fuel refuel recorded via inputs: {entry.liters}L {entry.fuel_type.value} at {entry.odometer}km")
+        self.publish("fuel/refuel/status", "success")
+
+        # reset pending inputs
+        self._pending_fuel_liters = None
+        self._pending_fuel_cost = None
+        self._pending_fuel_type = None
+        self._pending_fuel_partial = False
+
+        # Publish fresh stats after refuel
+        try:
+            self.publish_fuel_stats()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
