@@ -321,6 +321,43 @@ class CANService(miqro.Service):
             name="Tanken: Bestätigen",
             command_topic_postfix="fuel/input/confirm",
         )
+        
+        # HA sensors for statistics (these will create MQTT discovery entries)
+        self.sensor_fuel_avg_l = ha_sensors.Sensor(
+            self.device_car,
+            name="Durchschnittsverbrauch (l/100km)",
+            state_topic_postfix="fuel/stats/average_l_per_100km",
+            unit_of_measurement="l/100km",
+            state_class="measurement",
+        )
+        self.sensor_fuel_avg_km_per_l = ha_sensors.Sensor(
+            self.device_car,
+            name="Durchschnittsverbrauch (km/l)",
+            state_topic_postfix="fuel/stats/average_km_per_l",
+            unit_of_measurement="km/l",
+            state_class="measurement",
+        )
+        self.sensor_fuel_last_leg = ha_sensors.Sensor(
+            self.device_car,
+            name="Verbrauch letzte Etappe",
+            state_topic_postfix="fuel/stats/last_leg_consumption",
+            unit_of_measurement="l/100km",
+            state_class="measurement",
+        )
+        self.sensor_fuel_total_entries = ha_sensors.Sensor(
+            self.device_car,
+            name="Tanken: Einträge insgesamt",
+            state_topic_postfix="fuel/stats/total_entries",
+            unit_of_measurement=None,
+            state_class="measurement",
+        )
+        self.sensor_fuel_full_refuels = ha_sensors.Sensor(
+            self.device_car,
+            name="Tanken: Volle Befüllungen",
+            state_topic_postfix="fuel/stats/full_refuels",
+            unit_of_measurement=None,
+            state_class="measurement",
+        )
 
     def handle_door_vehicle_status(self, msg):
         door_status_byte = msg.data[1]
