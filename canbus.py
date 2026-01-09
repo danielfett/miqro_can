@@ -186,6 +186,14 @@ class CANService(miqro.Service):
             device_class="distance",
             state_class="total_increasing",
         )
+        self.sensor_overall_kilometers_last_stop = ha_sensors.Sensor(
+            self.device_car,
+            name="Gesamtkilometer letzter Halt",
+            state_topic_postfix="overall_kilometers_last_stop",
+            unit_of_measurement="km",
+            device_class="distance",
+            state_class="measurement",
+        )
         self.sensor_kilometers_remaining = ha_sensors.Sensor(
             self.device_car,
             name="Reichweite",
@@ -366,6 +374,8 @@ class CANService(miqro.Service):
         overall_kilometers = int(
             (msg.data[1] & 0xF) << 16 | msg.data[2] << 8 | msg.data[3]
         )
+        # remember last seen overall kilometers so we can publish it on ignition-off
+        self.last_overall_kilometers = overall_kilometers
         self.publish(
             "overall_kilometers",
             overall_kilometers,
@@ -518,6 +528,12 @@ class CANService(miqro.Service):
         self.bus = can_cls(self.CAN_CHANNEL, can_filters=self.CAN_IDS.values())
         self.last_canbus_message_received = None
         self.create_ha_sensors()
+        # last seen overall kilometers from CAN messages
+        self.last_overall_kilometers = None
+        # whether we've published the last-stop value for the current ignition-off
+        self._last_stop_published = False
+        # track last ignition state to detect transitions (0 or 1)
+        self._last_ignition_state = None
 
     def try_recover(self):
         # ifdown can0 and ifup can0 when the CAN bus is not working
@@ -605,6 +621,29 @@ class CANService(miqro.Service):
             ignition = 0
         else:
             ignition = 1
+        # detect ignition transitions to publish overall_kilometers_last_stop once
+        current_ignition = ignition
+        prev_ignition = getattr(self, "_last_ignition_state", None)
+        if prev_ignition is None:
+            self._last_ignition_state = current_ignition
+        else:
+            if prev_ignition == 1 and current_ignition == 0:
+                # ignition turned off - publish the last seen overall kilometers once
+                if not getattr(self, "_last_stop_published", False):
+                    if self.last_overall_kilometers is not None:
+                        self.publish(
+                            "overall_kilometers_last_stop",
+                            self.last_overall_kilometers,
+                            qos=self.QOS_AT_LEAST_ONCE,
+                            only_if_changed=False,
+                            retain=True,
+                        )
+                    self._last_stop_published = True
+            elif prev_ignition == 0 and current_ignition == 1:
+                # ignition turned on - reset published flag so next off will publish
+                self._last_stop_published = False
+            self._last_ignition_state = current_ignition
+
         self.publish("ignition", ignition, only_if_changed=timedelta(seconds=60))
 
     @miqro.handle("debug")
