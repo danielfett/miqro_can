@@ -7,6 +7,12 @@ from collections import deque
 import os
 from time import sleep
 
+try:
+    from esphome_packet_transport import PacketTransport
+    HAS_UDP_SENDER = True
+except ImportError:
+    HAS_UDP_SENDER = False
+
 
 class CANService(miqro.Service):
     SERVICE_NAME = "can"
@@ -16,7 +22,7 @@ class CANService(miqro.Service):
     LOOP_INTERVAL = 0.02
 
     SPEED_CAL_ADD = 0
-    SPEED_CAL_MULT = 1.01
+    SPEED_CAL_MULT = 1.0
 
     angle_pitch = deque(maxlen=10)
     angle_roll = deque(maxlen=10)
@@ -31,12 +37,18 @@ class CANService(miqro.Service):
     IGNITION_TIMEOUT = timedelta(seconds=3)
 
     def create_ha_sensors(self):
+        device_config = self.service_config.get("device", {})
+        device_name = device_config.get("name", "Vehicle")
+        device_model = device_config.get("model", "Unknown")
+        device_manufacturer = device_config.get("manufacturer", "Unknown")
+        device_identifiers = device_config.get("identifiers", [device_name])
+
         self.device_car = ha_sensors.Device(
             self,
-            name="Basisfahrzeug",
-            model="Jumper",
-            manufacturer="Citroën",
-            identifiers=["SU RF 2616"],
+            name=device_name,
+            model=device_model,
+            manufacturer=device_manufacturer,
+            identifiers=device_identifiers,
         )
 
         self.sensor_door_front_left = ha_sensors.BinarySensor(
@@ -349,8 +361,8 @@ class CANService(miqro.Service):
 
         # rest is the speed in 16ths of km/h
         speed = (
-            round(int(second_nibble << 8 | msg.data[3]) / 16) * self.SPEED_CAL_MULT
-            + self.SPEED_CAL_ADD
+            round(int(second_nibble << 8 | msg.data[3]) / 16) * self.speed_cal_mult
+            + self.speed_cal_add
         )
         self.speed.append(speed)
         self.publish("speed", speed, qos=self.QOS_AT_LEAST_ONCE)
@@ -515,20 +527,69 @@ class CANService(miqro.Service):
 
     def __init__(self, *args, can_cls=SocketcanBus, **kwargs):
         super().__init__(*args, **kwargs)
-        self.bus = can_cls(self.CAN_CHANNEL, can_filters=self.CAN_IDS.values())
+
+        can_config = self.service_config.get("can", {})
+        self.can_channel = can_config.get("channel", self.CAN_CHANNEL)
+        self.can_timeout = can_config.get("timeout", self.CAN_TIMEOUT)
+        self.speed_cal_add = can_config.get("speed_calibration_add", self.SPEED_CAL_ADD)
+        self.speed_cal_mult = can_config.get("speed_calibration_mult", self.SPEED_CAL_MULT)
+
+        self.bus = can_cls(self.can_channel, can_filters=self.CAN_IDS.values())
         self.last_canbus_message_received = None
         self.create_ha_sensors()
+        self._init_udp_sender()
+
+    def _init_udp_sender(self):
+        self.udp_sender = None
+        self.udp_sender_enabled = False
+
+        if not HAS_UDP_SENDER:
+            return
+
+        udp_config = self.service_config.get("udp_sender", {})
+        if not udp_config.get("enabled", False):
+            return
+
+        try:
+            addresses = udp_config.get("addresses")
+            encryption_key = udp_config.get("encryption_key")
+            rolling_code = udp_config.get("rolling_code", False)
+            rolling_code_start = udp_config.get("rolling_code_start", 0)
+
+            kwargs = {"addresses": addresses} if addresses else {}
+            if encryption_key:
+                kwargs["encryption_key"] = encryption_key
+            if rolling_code:
+                kwargs["rolling_code"] = True
+                kwargs["rolling_code_start"] = rolling_code_start
+
+            self.udp_sender = PacketTransport("miqro_can", **kwargs)
+            self.udp_sender_enabled = True
+            self.log.info(f"UDP sender initialized with addresses: {addresses}")
+        except Exception as e:
+            self.log.error(f"Failed to initialize UDP sender: {e}")
+
+    @miqro.loop(milliseconds=500)
+    def send_speed_via_udp(self):
+        if not self.udp_sender_enabled or not len(self.speed):
+            return
+
+        try:
+            speed_value = sum(self.speed) / len(self.speed)
+            self.udp_sender.send(sensors={"speed": speed_value})
+        except Exception as e:
+            self.log.error(f"Failed to send speed via UDP: {e}")
 
     def try_recover(self):
         # ifdown can0 and ifup can0 when the CAN bus is not working
-        os.system(f"ip link set {self.CAN_CHANNEL} down")
+        os.system(f"ip link set {self.can_channel} down")
         sleep(1)
-        os.system(f"ip link set {self.CAN_CHANNEL} up type can bitrate 50000")
+        os.system(f"ip link set {self.can_channel} up type can bitrate 50000")
 
     @miqro.loop(seconds=0)
     def recv_from_can(self):
         try:
-            msg = self.bus.recv(timeout=self.CAN_TIMEOUT)
+            msg = self.bus.recv(timeout=self.can_timeout)
         except CanError:
             self.try_recover()
             return

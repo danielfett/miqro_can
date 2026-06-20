@@ -50,8 +50,45 @@ broker:
     
 log_level: INFO
 
-services: {}
+services:
+  can:
+    # Required: Device information for Home Assistant
+    device:
+      name: "My Vehicle"
+      model: "Jumper"
+      manufacturer: "Citroën"
+      identifiers:
+        - "vehicle-id-123"
+
+    # Optional: CAN bus configuration
+    can:
+      channel: "can0"              # CAN interface (default: can0)
+      timeout: 0.005               # Receive timeout in seconds (default: 0.005)
+      speed_calibration_mult: 1.0  # Speed multiplier for calibration (default: 1.0)
+      speed_calibration_add: 0     # Speed offset for calibration (default: 0)
 ```
+
+The device section is required. Provide your vehicle information without leaking sensitive identifiers; use generic identifiers like a custom vehicle ID instead of VINs or license plates.
+
+#### Optional: UDP Sender
+
+To send the speed value via UDP to an ESPHome node (requires `esphome-udp-sender` package), add the following to your configuration:
+
+```yaml
+services:
+  can:
+    udp_sender:
+      enabled: true
+      addresses:
+        - "dashboardesp.local"
+      # Optional: encryption_key for secured communication
+      # encryption_key: "my secret pass phrase"
+      # Optional: rolling code for replay protection (requires encryption_key)
+      # rolling_code: true
+      # rolling_code_start: 0
+```
+
+The UDP sender will periodically send the current speed value to the configured ESPHome device(s). If the `esphome-udp-sender` package is not installed, the service will continue to work normally with UDP sending simply disabled.
 
 ### MQTT Topics
 

@@ -1,0 +1,36 @@
+broker:
+    host: localhost
+    port: 1883
+    keepalive: 60
+
+log_level: INFO
+
+services:
+  can:
+    # Required: Device information for Home Assistant
+    device:
+      name: "My Vehicle"
+      model: "Jumper"
+      manufacturer: "Citroën"
+      identifiers:
+        - "vehicle-id-123"
+
+    # Optional: CAN bus configuration
+    can:
+      channel: "can0"              # CAN interface (default: can0)
+      timeout: 0.005               # Receive timeout in seconds (default: 0.005)
+      speed_calibration_mult: 1.0  # Speed multiplier for calibration (default: 1.0)
+      speed_calibration_add: 0     # Speed offset for calibration (default: 0)
+
+    # Optional: UDP sender configuration for sending speed to ESPHome devices
+    # Requires esphome-udp-sender package: pip install esphome-udp-sender
+    udp_sender:
+      enabled: false
+      # Target address(es) - can be a hostname or IP address
+      addresses:
+        - "dashboardesp.local"
+      # Optional: encryption key for secure communication
+      # encryption_key: "my secret pass phrase"
+      # Optional: rolling code for replay protection (requires encryption_key)
+      # rolling_code: true
+      # rolling_code_start: 0
