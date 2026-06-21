@@ -364,6 +364,9 @@ class CANService(miqro.Service):
             round(int(second_nibble << 8 | msg.data[3]) / 16) * self.speed_cal_mult
             + self.speed_cal_add
         )
+
+        self.send_speed_via_udp(speed)
+
         self.speed.append(speed)
         self.publish("speed", speed, qos=self.QOS_AT_LEAST_ONCE)
 
@@ -569,14 +572,12 @@ class CANService(miqro.Service):
         except Exception as e:
             self.log.error(f"Failed to initialize UDP sender: {e}")
 
-    @miqro.loop(milliseconds=500)
-    def send_speed_via_udp(self):
-        if not self.udp_sender_enabled or not len(self.speed):
+    def send_speed_via_udp(self, speed):
+        if not self.udp_sender_enabled or speed is None:
             return
 
         try:
-            speed_value = sum(self.speed) / len(self.speed)
-            self.udp_sender.send(sensors={"speed": speed_value})
+            self.udp_sender.send(sensors={"speed_udp": speed})
         except Exception as e:
             self.log.error(f"Failed to send speed via UDP: {e}")
 
