@@ -300,6 +300,29 @@ class CANService(miqro.Service):
         light = 1 if (msg.data[0] & 0x08) else 0
         self.publish("light", light, only_if_changed=True)
 
+        # handle lock status from byte 3: 0x20 means unlocked, 0x00 means locked
+        if msg.data[3] & 0x20:
+            self.last_lock_status["front"] = False
+            self.last_lock_status["back"] = False
+        else:
+            self.last_lock_status["front"] = True
+            self.last_lock_status["back"] = True
+
+        lock_data = {
+            "front": "locked" if self.last_lock_status["front"] else "unlocked",
+            "back": "locked" if self.last_lock_status["back"] else "unlocked",
+            "all_locked": self.last_lock_status["front"]
+            and self.last_lock_status["back"],
+        }
+        self.publish_json("lock/data", lock_data, only_if_changed=True)
+        self.publish_json_keys(
+            lock_data,
+            "lock",
+            retain=True,
+            qos=self.QOS_EXACTLY_ONCE,
+            only_if_changed=timedelta(minutes=1),
+        )
+
     def handle_attitude(self, msg):
         if not msg.data[0] and not msg.data[1]:
             return
