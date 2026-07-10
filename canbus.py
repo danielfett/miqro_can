@@ -319,13 +319,13 @@ class CANService(miqro.Service):
         light = 1 if (msg.data[0] & 0x08) else 0
         self.publish("light", light, only_if_changed=True)
 
-        # handle lock status from byte 3: 0x20 means unlocked, 0x00 means locked
+        # handle lock status from byte 3: 0x20 means locked, 0x00 means unlocked
         if msg.data[3] & 0x20:
-            self.last_lock_status["front"] = False
-            self.last_lock_status["back"] = False
-        else:
             self.last_lock_status["front"] = True
             self.last_lock_status["back"] = True
+        else:
+            self.last_lock_status["front"] = False
+            self.last_lock_status["back"] = False
 
         lock_data = {
             "front": "locked" if self.last_lock_status["front"] else "unlocked",
