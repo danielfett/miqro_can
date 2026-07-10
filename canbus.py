@@ -234,7 +234,23 @@ class CANService(miqro.Service):
             payload_off="1",
         )
 
-        # TODO: buttons on remote
+        # lock button events
+
+        self.event_lock_button_close = ha_sensors.Event(
+            self.device_car,
+            name="Schließ-Knopf",
+            event_topic_postfix="lock/button/close",
+        )
+        self.event_lock_button_front = ha_sensors.Event(
+            self.device_car,
+            name="Vordertüren-Knopf",
+            event_topic_postfix="lock/button/front",
+        )
+        self.event_lock_button_back = ha_sensors.Event(
+            self.device_car,
+            name="Hecktüren-Knopf",
+            event_topic_postfix="lock/button/back",
+        )
 
         # cruise control
 
