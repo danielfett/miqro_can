@@ -239,17 +239,20 @@ class CANService(miqro.Service):
         self.event_lock_button_close = ha_sensors.Event(
             self.device_car,
             name="Schließ-Knopf",
-            state_topic_postfix="lock/button/close",
+            event_topic_postfix="lock/button/close",
+            event_types=["press", "long_press", "double_press", "release"],
         )
         self.event_lock_button_front = ha_sensors.Event(
             self.device_car,
             name="Vordertüren-Knopf",
-            state_topic_postfix="lock/button/front",
+            event_topic_postfix="lock/button/front",
+            event_types=["press", "long_press", "double_press", "release"],
         )
         self.event_lock_button_back = ha_sensors.Event(
             self.device_car,
             name="Hecktüren-Knopf",
-            state_topic_postfix="lock/button/back",
+            event_topic_postfix="lock/button/back",
+            event_types=["press", "long_press", "double_press", "release"],
         )
 
         # cruise control
