@@ -238,21 +238,24 @@ class CANService(miqro.Service):
 
         self.event_lock_button_close = ha_sensors.Event(
             self.device_car,
-            name="Schließ-Knopf",
+            name="Fernbedienung Schließ-Knopf",
             state_topic_postfix="lock/button/close",
             event_types=["press", "long_press", "double_press", "release"],
+            value_template="""{"event_type": "{{ value }}"}""",
         )
         self.event_lock_button_front = ha_sensors.Event(
             self.device_car,
-            name="Vordertüren-Knopf",
+            name="Fernbedienung Vordertüren-Knopf",
             state_topic_postfix="lock/button/front",
             event_types=["press", "long_press", "double_press", "release"],
+            value_template="""{"event_type": "{{ value }}"}""",
         )
         self.event_lock_button_back = ha_sensors.Event(
             self.device_car,
-            name="Hecktüren-Knopf",
+            name="Fernbedienung Hecktüren-Knopf",
             state_topic_postfix="lock/button/back",
             event_types=["press", "long_press", "double_press", "release"],
+            value_template="""{"event_type": "{{ value }}"}""",
         )
 
         # cruise control
@@ -320,27 +323,8 @@ class CANService(miqro.Service):
         self.publish("light", light, only_if_changed=True)
 
         # handle lock status from byte 3: 0x20 means locked, 0x00 means unlocked
-        if msg.data[3] & 0x20:
-            self.last_lock_status["front"] = True
-            self.last_lock_status["back"] = True
-        else:
-            self.last_lock_status["front"] = False
-            self.last_lock_status["back"] = False
-
-        lock_data = {
-            "front": "locked" if self.last_lock_status["front"] else "unlocked",
-            "back": "locked" if self.last_lock_status["back"] else "unlocked",
-            "all_locked": self.last_lock_status["front"]
-            and self.last_lock_status["back"],
-        }
-        self.publish_json("lock/data", lock_data, only_if_changed=True)
-        self.publish_json_keys(
-            lock_data,
-            "lock",
-            retain=True,
-            qos=self.QOS_EXACTLY_ONCE,
-            only_if_changed=timedelta(minutes=1),
-        )
+        unknown = 1 if (msg.data[3] & 0x20) else 0
+        self.publish("unknown_maybe_lock", unknown, only_if_changed=True)
 
     def handle_attitude(self, msg):
         if not msg.data[0] and not msg.data[1]:
