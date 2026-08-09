@@ -33,7 +33,8 @@ class CANService(miqro.Service):
     debug = False
     distance_accumulation_enabled = False
     _last_wheel_counters = {}
-    _distance_accumulated_cm = 0
+    _distance_left_cm = 0
+    _distance_right_cm = 0
     _last_engine_telemetry_published = None
 
     CAN_ATTITUDE_MAX_DELAY = timedelta(seconds=0.2)
@@ -201,10 +202,17 @@ class CANService(miqro.Service):
             device_class="safety",
         )
 
-        self.sensor_distance_accumulated = ha_sensors.Sensor(
+        self.sensor_distance_left = ha_sensors.Sensor(
             self.device_car,
-            name="Strecke (akkumuliert)",
-            state_topic_postfix="distance_accumulated",
+            name="Strecke links (akkumuliert)",
+            state_topic_postfix="distance_left",
+            unit_of_measurement="cm",
+            state_class="total_increasing",
+        )
+        self.sensor_distance_right = ha_sensors.Sensor(
+            self.device_car,
+            name="Strecke rechts (akkumuliert)",
+            state_topic_postfix="distance_right",
             unit_of_measurement="cm",
             state_class="total_increasing",
         )
@@ -470,19 +478,34 @@ class CANService(miqro.Service):
         self.speed.append(speed)
         self.publish("speed", speed, qos=self.QOS_AT_LEAST_ONCE)
 
-        # distance counters (bytes 4-7): two 13-bit wheel accumulators
+        # distance counters (bytes 4-7): two 13-bit wheel accumulators (left and right)
         if self.distance_accumulation_enabled:
-            c1 = (msg.data[4] << 8 | msg.data[5]) & 0x1FFF
+            c_left = (msg.data[4] << 8 | msg.data[5]) & 0x1FFF
+            c_right = (msg.data[6] << 8 | msg.data[7]) & 0x1FFF
 
-            prev = self._last_wheel_counters.get("c1")
-            self._last_wheel_counters["c1"] = c1
-            if prev is not None:
-                delta_counts = (c1 - prev) & 0x1FFF
+            # left wheel
+            prev_left = self._last_wheel_counters.get("left")
+            self._last_wheel_counters["left"] = c_left
+            if prev_left is not None:
+                delta_counts = (c_left - prev_left) & 0x1FFF
                 delta_m = delta_counts / 43.2
-                self._distance_accumulated_cm += delta_m * 100
+                self._distance_left_cm += delta_m * 100
                 self.publish(
-                    "distance_accumulated",
-                    int(self._distance_accumulated_cm),
+                    "distance_left",
+                    int(self._distance_left_cm),
+                    qos=self.QOS_AT_LEAST_ONCE,
+                )
+
+            # right wheel
+            prev_right = self._last_wheel_counters.get("right")
+            self._last_wheel_counters["right"] = c_right
+            if prev_right is not None:
+                delta_counts = (c_right - prev_right) & 0x1FFF
+                delta_m = delta_counts / 43.2
+                self._distance_right_cm += delta_m * 100
+                self.publish(
+                    "distance_right",
+                    int(self._distance_right_cm),
                     qos=self.QOS_AT_LEAST_ONCE,
                 )
 
@@ -824,7 +847,8 @@ class CANService(miqro.Service):
     def handle_distance_accumulation(self, message):
         if message in ["1", "true", "on"]:
             self.distance_accumulation_enabled = True
-            self._distance_accumulated_cm = 0
+            self._distance_left_cm = 0
+            self._distance_right_cm = 0
             self._last_wheel_counters = {}
         else:
             self.distance_accumulation_enabled = False
