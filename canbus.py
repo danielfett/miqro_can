@@ -183,6 +183,21 @@ class CANService(miqro.Service):
 
         # fuel
 
+        self.sensor_fuel_level = ha_sensors.Sensor(
+            self.device_car,
+            name="Kraftstoffpegel",
+            state_topic_postfix="fuel_level",
+            unit_of_measurement="L",
+            device_class="fuel",
+            state_class="measurement",
+        )
+        self.sensor_fuel_warning = ha_sensors.BinarySensor(
+            self.device_car,
+            name="Kraftstoff niedrig",
+            state_topic_postfix="fuel_warning",
+            device_class="problem",
+        )
+
         self.sensor_current_consumption = ha_sensors.Sensor(
             self.device_car,
             name="Aktueller Verbrauch",
@@ -325,6 +340,14 @@ class CANService(miqro.Service):
         # handle lock status from byte 3: 0x20 means locked, 0x00 means unlocked
         unknown = 1 if (msg.data[3] & 0x20) else 0
         self.publish("unknown_maybe_lock", unknown, only_if_changed=True)
+
+        # fuel level in litres (byte 5)
+        fuel_level = msg.data[5]
+        self.publish("fuel_level", fuel_level, only_if_changed=True, retain=True)
+
+        # low-fuel warning lamp (byte 4, bit 1)
+        fuel_warning = 1 if (msg.data[4] & 0x02) else 0
+        self.publish("fuel_warning", fuel_warning, only_if_changed=True, retain=True)
 
     def handle_attitude(self, msg):
         if not msg.data[0] and not msg.data[1]:
