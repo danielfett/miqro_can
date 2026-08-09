@@ -31,6 +31,10 @@ class CANService(miqro.Service):
     last_ignition_signal_acquired = None
     last_lock_status = {"front": True, "back": True}  # True is locked
     debug = False
+    distance_accumulation_enabled = False
+    _last_wheel_counters = {}
+    _distance_accumulated_cm = 0
+    _last_engine_telemetry_published = None
 
     CAN_ATTITUDE_MAX_DELAY = timedelta(seconds=0.2)
     CAN_ACTIVITY_TIMEOUT = timedelta(seconds=3)
@@ -127,6 +131,22 @@ class CANService(miqro.Service):
             device_class="temperature",
             state_class="measurement",
         )
+        self.sensor_temperature_unknown = ha_sensors.Sensor(
+            self.device_car,
+            name="Temperatur (unbekannt)",
+            state_topic_postfix="temperature/unknown",
+            unit_of_measurement="°C",
+            device_class="temperature",
+            state_class="measurement",
+        )
+        self.sensor_coolant_temperature = ha_sensors.Sensor(
+            self.device_car,
+            name="Kühlmitteltemperatur",
+            state_topic_postfix="coolant_temperature",
+            unit_of_measurement="°C",
+            device_class="temperature",
+            state_class="measurement",
+        )
 
         # voltage
 
@@ -181,15 +201,33 @@ class CANService(miqro.Service):
             device_class="safety",
         )
 
+        self.sensor_distance_accumulated = ha_sensors.Sensor(
+            self.device_car,
+            name="Strecke (akkumuliert)",
+            state_topic_postfix="distance_accumulated",
+            unit_of_measurement="cm",
+            state_class="total_increasing",
+        )
+
+        # engine
+
+        self.sensor_engine_speed = ha_sensors.Sensor(
+            self.device_car,
+            name="Drehzahl (unkalibriert)",
+            state_topic_postfix="engine_speed",
+            unit_of_measurement="rpm",
+            state_class="measurement",
+        )
+
         # fuel
 
         self.sensor_fuel_level = ha_sensors.Sensor(
             self.device_car,
-            name="Kraftstoff",
+            name="Tankinhalt",
             state_topic_postfix="fuel_level",
             unit_of_measurement="L",
-            device_class="volume",
             state_class="measurement",
+            icon="mdi:fuel",
         )
         self.sensor_fuel_warning = ha_sensors.BinarySensor(
             self.device_car,
@@ -343,11 +381,21 @@ class CANService(miqro.Service):
 
         # fuel level in litres (byte 5)
         fuel_level = msg.data[5]
-        self.publish("fuel_level", fuel_level, only_if_changed=True, retain=True)
+        self.publish(
+            "fuel_level",
+            fuel_level,
+            only_if_changed=timedelta(seconds=30),
+            retain=True,
+        )
 
         # low-fuel warning lamp (byte 4, bit 1)
         fuel_warning = 1 if (msg.data[4] & 0x02) else 0
-        self.publish("fuel_warning", fuel_warning, only_if_changed=True, retain=True)
+        self.publish(
+            "fuel_warning",
+            fuel_warning,
+            only_if_changed=timedelta(seconds=30),
+            retain=True,
+        )
 
     def handle_attitude(self, msg):
         if not msg.data[0] and not msg.data[1]:
@@ -359,6 +407,9 @@ class CANService(miqro.Service):
     def handle_temperature(self, msg):
         temp = (msg.data[0] - 80) / 2
         self.publish("temperature/outside", temp, only_if_changed=True)
+
+        temp_unknown = (msg.data[5] - 80) / 2
+        self.publish("temperature/unknown", temp_unknown, only_if_changed=True)
 
         voltage = msg.data[1] / 6
         self.publish("voltage", voltage, only_if_changed=True)
@@ -374,25 +425,25 @@ class CANService(miqro.Service):
         )
 
     def handle_maintenance(self, msg):
-        if msg.data[1] == 0xFF and msg.data[2] == 0xFF:
-            return
-        oil = msg.data[1] << 8 | msg.data[2]
-        self.publish(
-            "maintenance/oil_change_km",
-            oil,
-            qos=self.QOS_AT_LEAST_ONCE,
-            only_if_changed=True,
-            retain=True,
-        )
+        if not (msg.data[1] == 0xFF and msg.data[2] == 0xFF):
+            oil = msg.data[1] << 8 | msg.data[2]
+            self.publish(
+                "maintenance/oil_change_km",
+                oil,
+                qos=self.QOS_AT_LEAST_ONCE,
+                only_if_changed=True,
+                retain=True,
+            )
 
-        unknown = (msg.data[4] << 4 | msg.data[5] >> 4) * 16
-        self.publish(
-            "maintenance/unknown_km",
-            unknown,
-            qos=self.QOS_AT_LEAST_ONCE,
-            only_if_changed=True,
-            retain=True,
-        )
+        if not (msg.data[4] == 0xFF and (msg.data[5] & 0xF0) == 0xF0):
+            unknown = (msg.data[4] << 4 | msg.data[5] >> 4) * 16
+            self.publish(
+                "maintenance/unknown_km",
+                unknown,
+                qos=self.QOS_AT_LEAST_ONCE,
+                only_if_changed=True,
+                retain=True,
+            )
 
     def handle_speed(self, msg):
         # 2023-11: there seem to be other data in the first nibble of msg.data[2], so we treat it separately
@@ -418,6 +469,22 @@ class CANService(miqro.Service):
 
         self.speed.append(speed)
         self.publish("speed", speed, qos=self.QOS_AT_LEAST_ONCE)
+
+        # distance counters (bytes 4-7): two 13-bit wheel accumulators
+        if self.distance_accumulation_enabled:
+            c1 = (msg.data[4] << 8 | msg.data[5]) & 0x1FFF
+
+            prev = self._last_wheel_counters.get("c1")
+            self._last_wheel_counters["c1"] = c1
+            if prev is not None:
+                delta_counts = (c1 - prev) & 0x1FFF
+                delta_m = delta_counts / 43.2
+                self._distance_accumulated_cm += delta_m * 100
+                self.publish(
+                    "distance_accumulated",
+                    int(self._distance_accumulated_cm),
+                    qos=self.QOS_AT_LEAST_ONCE,
+                )
 
         self.last_ignition_signal_acquired = datetime.now()
 
@@ -529,6 +596,29 @@ class CANService(miqro.Service):
         # last nibble is 4 if reverse gear is engaged, 0 otherwise
         reverse = 1 if (msg.data[7] == 0x04) else 0
         self.publish("reverse", reverse, only_if_changed=timedelta(seconds=5))
+
+        # coolant temperature (byte 3): °C = value - 40
+        coolant_temp = msg.data[3] - 40
+        # engine speed (byte 6): rpm = value * 32
+        engine_speed = msg.data[6] * 32
+
+        # throttle to ~1 Hz
+        now = datetime.now()
+        if (
+            self._last_engine_telemetry_published is None
+            or now - self._last_engine_telemetry_published >= timedelta(seconds=1)
+        ):
+            self.publish(
+                "coolant_temperature",
+                coolant_temp,
+                only_if_changed=True,
+            )
+            self.publish(
+                "engine_speed",
+                engine_speed,
+                only_if_changed=True,
+            )
+            self._last_engine_telemetry_published = now
 
     CAN_IDS = {
         handle_speed: {
@@ -718,9 +808,26 @@ class CANService(miqro.Service):
             ignition = 1
         self.publish("ignition", ignition, only_if_changed=timedelta(seconds=60))
 
+        # auto-disable distance accumulation if CAN is unavailable for >1 minute
+        if self.distance_accumulation_enabled and (
+            self.last_canbus_message_received is None
+            or self.last_canbus_message_received
+            < (datetime.now() - timedelta(seconds=60))
+        ):
+            self.distance_accumulation_enabled = False
+
     @miqro.handle("debug")
     def handle_debug(self, message):
         self.debug = message in ["1", "true", "on"]
+
+    @miqro.handle("distance_accumulation")
+    def handle_distance_accumulation(self, message):
+        if message in ["1", "true", "on"]:
+            self.distance_accumulation_enabled = True
+            self._distance_accumulated_cm = 0
+            self._last_wheel_counters = {}
+        else:
+            self.distance_accumulation_enabled = False
 
 
 if __name__ == "__main__":
