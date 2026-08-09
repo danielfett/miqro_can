@@ -231,10 +231,9 @@ class CANService(miqro.Service):
 
         self.sensor_fuel_level = ha_sensors.Sensor(
             self.device_car,
-            name="Tankinhalt",
+            name="Kraftstoff",
             state_topic_postfix="fuel_level",
             unit_of_measurement="L",
-            state_class="measurement",
             icon="mdi:fuel",
         )
         self.sensor_fuel_warning = ha_sensors.BinarySensor(
