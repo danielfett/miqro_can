@@ -387,22 +387,27 @@ class CANService(miqro.Service):
         self.publish("unknown_maybe_lock", unknown, only_if_changed=True)
 
         # fuel level in litres (byte 5)
+        # When the car is parked/shut down, the cluster sends zeroed frames.
+        # A real tank level of 0 L is not observable (the low-fuel warning kicks
+        # in long before), so treat 0 as "no reading" and keep the last value.
         fuel_level = msg.data[5]
-        self.publish(
-            "fuel_level",
-            fuel_level,
-            only_if_changed=timedelta(seconds=30),
-            retain=True,
-        )
+        if fuel_level:
+            self.publish(
+                "fuel_level",
+                fuel_level,
+                only_if_changed=timedelta(seconds=30),
+                retain=True,
+            )
 
-        # low-fuel warning lamp (byte 4, bit 1)
-        fuel_warning = 1 if (msg.data[4] & 0x02) else 0
-        self.publish(
-            "fuel_warning",
-            fuel_warning,
-            only_if_changed=timedelta(seconds=30),
-            retain=True,
-        )
+            # low-fuel warning lamp (byte 4, bit 1) - only trustworthy in the
+            # same frames that carry a valid fuel level
+            fuel_warning = 1 if (msg.data[4] & 0x02) else 0
+            self.publish(
+                "fuel_warning",
+                fuel_warning,
+                only_if_changed=timedelta(seconds=30),
+                retain=True,
+            )
 
     def handle_attitude(self, msg):
         if not msg.data[0] and not msg.data[1]:
