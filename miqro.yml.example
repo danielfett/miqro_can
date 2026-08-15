@@ -21,6 +21,7 @@ services:
       timeout: 0.005               # Receive timeout in seconds (default: 0.005)
       speed_calibration_mult: 1.0  # Speed multiplier for calibration (default: 1.0)
       speed_calibration_add: 0     # Speed offset for calibration (default: 0)
+      log_dir: "/var/lib/miqro/can_log"  # Directory for CAN bus recordings (default)
 
     # Optional: UDP sender configuration for sending speed to ESPHome devices
     # Requires esphome-udp-sender package: pip install esphome-udp-sender

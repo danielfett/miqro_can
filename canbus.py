@@ -36,6 +36,11 @@ class CANService(miqro.Service):
     _distance_left_cm = 0
     _distance_right_cm = 0
     _last_engine_telemetry_published = None
+    _recording_file = None
+    _recording_path = None
+    _recording_until = None
+
+    CAN_LOG_DIR = "/var/lib/miqro/can_log"
 
     CAN_ATTITUDE_MAX_DELAY = timedelta(seconds=0.2)
     CAN_ACTIVITY_TIMEOUT = timedelta(seconds=3)
@@ -215,6 +220,62 @@ class CANService(miqro.Service):
             state_topic_postfix="distance_right",
             unit_of_measurement="cm",
             state_class="total_increasing",
+        )
+        self.button_distance_accumulation = ha_sensors.Button(
+            self.device_car,
+            name="Streckenmessung starten",
+            command_topic_postfix="distance_accumulation/start",
+            command_callback=self.handle_distance_accumulation_button,
+            icon="mdi:map-marker-distance",
+        )
+        self.sensor_distance_accumulation_active = ha_sensors.BinarySensor(
+            self.device_car,
+            name="Streckenmessung aktiv",
+            state_topic_postfix="distance_accumulation/active",
+            device_class="running",
+        )
+
+        # CAN bus recording
+
+        self.button_can_log_10s = ha_sensors.Button(
+            self.device_car,
+            name="CAN-Log 10 Sekunden",
+            command_topic_postfix="can_log/record_10s",
+            command_callback=self.handle_can_log_10s,
+            icon="mdi:record-rec",
+        )
+        self.button_can_log_60s = ha_sensors.Button(
+            self.device_car,
+            name="CAN-Log 60 Sekunden",
+            command_topic_postfix="can_log/record_60s",
+            command_callback=self.handle_can_log_60s,
+            icon="mdi:record-rec",
+        )
+        self.button_can_log_5min = ha_sensors.Button(
+            self.device_car,
+            name="CAN-Log 5 Minuten",
+            command_topic_postfix="can_log/record_5min",
+            command_callback=self.handle_can_log_5min,
+            icon="mdi:record-rec",
+        )
+        self.button_can_log_cancel = ha_sensors.Button(
+            self.device_car,
+            name="CAN-Log abbrechen",
+            command_topic_postfix="can_log/cancel",
+            command_callback=self.handle_can_log_cancel,
+            icon="mdi:stop",
+        )
+        self.sensor_can_log_status = ha_sensors.Sensor(
+            self.device_car,
+            name="CAN-Log Status",
+            state_topic_postfix="can_log/status",
+            icon="mdi:file-document-outline",
+        )
+        self.sensor_can_log_file = ha_sensors.Sensor(
+            self.device_car,
+            name="CAN-Log Datei",
+            state_topic_postfix="can_log/file",
+            icon="mdi:file-outline",
         )
 
         # engine
@@ -702,8 +763,10 @@ class CANService(miqro.Service):
         self.can_timeout = can_config.get("timeout", self.CAN_TIMEOUT)
         self.speed_cal_add = can_config.get("speed_calibration_add", self.SPEED_CAL_ADD)
         self.speed_cal_mult = can_config.get("speed_calibration_mult", self.SPEED_CAL_MULT)
+        self.can_log_dir = can_config.get("log_dir", self.CAN_LOG_DIR)
 
-        self.bus = can_cls(self.can_channel, can_filters=self.CAN_IDS.values())
+        self._can_filters = list(self.CAN_IDS.values())
+        self.bus = can_cls(self.can_channel, can_filters=self._can_filters)
         self.last_canbus_message_received = None
         self.create_ha_sensors()
         self._init_udp_sender()
@@ -755,6 +818,9 @@ class CANService(miqro.Service):
 
     @miqro.loop(seconds=0)
     def recv_from_can(self):
+        if self._recording_file is not None and datetime.now() >= self._recording_until:
+            self.stop_can_recording()
+
         try:
             msg = self.bus.recv(timeout=self.can_timeout)
         except CanError:
@@ -764,6 +830,9 @@ class CANService(miqro.Service):
         if msg is None:
             return
         self.last_canbus_message_received = datetime.now()
+
+        if self._recording_file is not None:
+            self._record_can_message(msg)
 
         for fn, can_filter in self.CAN_IDS.items():
             if (msg.arbitration_id & can_filter["can_mask"]) == can_filter["can_id"]:
@@ -841,21 +910,110 @@ class CANService(miqro.Service):
             or self.last_canbus_message_received
             < (datetime.now() - timedelta(seconds=60))
         ):
-            self.distance_accumulation_enabled = False
+            self.set_distance_accumulation(False)
+
+        if self._recording_file is not None:
+            self._recording_file.flush()
+        self.publish_can_log_status()
 
     @miqro.handle("debug")
     def handle_debug(self, message):
         self.debug = message in ["1", "true", "on"]
 
-    @miqro.handle("distance_accumulation")
-    def handle_distance_accumulation(self, message):
-        if message in ["1", "true", "on"]:
+    def set_distance_accumulation(self, enabled):
+        if enabled:
             self.distance_accumulation_enabled = True
             self._distance_left_cm = 0
             self._distance_right_cm = 0
             self._last_wheel_counters = {}
         else:
             self.distance_accumulation_enabled = False
+        self.publish(
+            "distance_accumulation/active",
+            self.distance_accumulation_enabled,
+            retain=True,
+            only_if_changed=True,
+        )
+
+    @miqro.handle("distance_accumulation")
+    def handle_distance_accumulation(self, message):
+        self.set_distance_accumulation(message in ["1", "true", "on"])
+
+    def handle_distance_accumulation_button(self, _, payload):
+        self.set_distance_accumulation(True)
+
+    # CAN bus recording
+
+    def handle_can_log_10s(self, _, payload):
+        self.start_can_recording(10)
+
+    def handle_can_log_60s(self, _, payload):
+        self.start_can_recording(60)
+
+    def handle_can_log_5min(self, _, payload):
+        self.start_can_recording(300)
+
+    def handle_can_log_cancel(self, _, payload):
+        self.stop_can_recording()
+
+    def start_can_recording(self, duration_seconds):
+        if self._recording_file is not None:
+            self._close_recording_file()
+
+        try:
+            os.makedirs(self.can_log_dir, exist_ok=True)
+            base = datetime.now().strftime("can_%Y-%m-%d_%H-%M-%S")
+            path = os.path.join(self.can_log_dir, f"{base}.log")
+            counter = 1
+            while os.path.exists(path):
+                path = os.path.join(self.can_log_dir, f"{base}_{counter}.log")
+                counter += 1
+            self._recording_file = open(path, "w")
+        except OSError as e:
+            self.log.error(f"Cannot open CAN log file: {e}")
+            self.publish("can_log/status", "error", retain=True, only_if_changed=True)
+            return
+
+        self._recording_path = path
+        self._recording_until = datetime.now() + timedelta(seconds=duration_seconds)
+        # record everything on the bus, not just the IDs handled above
+        self.bus.set_filters(None)
+        self.log.info(f"Recording CAN bus to {path} for {duration_seconds} s")
+        self.publish("can_log/file", path, retain=True)
+        self.publish_can_log_status()
+
+    def stop_can_recording(self):
+        if self._recording_file is None:
+            return
+        self._close_recording_file()
+        self.publish_can_log_status()
+
+    def _close_recording_file(self):
+        self.bus.set_filters(self._can_filters)
+        self._recording_file.close()
+        self._recording_file = None
+        self._recording_until = None
+        self.log.info(f"CAN recording written to {self._recording_path}")
+
+    def _record_can_message(self, msg):
+        # candump-compatible log format, replayable with canplayer
+        timestamp = msg.timestamp or datetime.now().timestamp()
+        can_id = (
+            f"{msg.arbitration_id:08X}"
+            if msg.is_extended_id
+            else f"{msg.arbitration_id:03X}"
+        )
+        self._recording_file.write(
+            f"({timestamp:.6f}) {self.can_channel} {can_id}#{msg.data.hex().upper()}\n"
+        )
+
+    def publish_can_log_status(self):
+        if self._recording_file is not None:
+            remaining = (self._recording_until - datetime.now()).total_seconds()
+            status = f"recording ({max(0, round(remaining))} s left)"
+        else:
+            status = "idle"
+        self.publish("can_log/status", status, retain=True, only_if_changed=True)
 
 
 if __name__ == "__main__":
