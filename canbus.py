@@ -188,6 +188,12 @@ class CANService(miqro.Service):
             state_topic_postfix="maintenance/unknown_km",
             unit_of_measurement="km",
         )
+        self.sensor_maintenance_service_km = ha_sensors.Sensor(
+            self.device_car,
+            name="Wartung: Service in km",
+            state_topic_postfix="maintenance/service_km",
+            unit_of_measurement="km",
+        )
 
         # speed
 
@@ -518,6 +524,20 @@ class CANService(miqro.Service):
                 retain=True,
             )
 
+    def handle_service_countdown(self, msg):
+        # 0x0A194003: second maintenance countdown, alongside the oil change in
+        # 0x06254000. 16-bit big-endian, 2 km per count. Which service interval
+        # it tracks is not known, so the name is kept neutral.
+        # Bytes 2-7 are always zero.
+        service_km = ((msg.data[0] << 8) | msg.data[1]) * 2
+        self.publish(
+            "maintenance/service_km",
+            service_km,
+            qos=self.QOS_AT_LEAST_ONCE,
+            only_if_changed=True,
+            retain=True,
+        )
+
     def handle_speed(self, msg):
         # 2023-11: there seem to be other data in the first nibble of msg.data[2], so we treat it separately
         first_nibble = msg.data[2] >> 4
@@ -731,6 +751,10 @@ class CANService(miqro.Service):
         },
         handle_maintenance: {
             "can_id": 0x06254000,
+            "can_mask": 0x1FFFFFFF,
+        },
+        handle_service_countdown: {
+            "can_id": 0x0A194003,
             "can_mask": 0x1FFFFFFF,
         },
         handle_start_stop: {

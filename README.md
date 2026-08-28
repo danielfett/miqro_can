@@ -108,6 +108,7 @@ The service publishes CAN bus messages to MQTT topics under `service/canbus/`.
 | Seatbelt | `service/canbus/seatbelt_open` | binary | Driver seatbelt status |
 | Oil Change Maintenance | `service/canbus/maintenance/oil_change_km` | km | Distance until oil change |
 | Unknown Maintenance | `service/canbus/maintenance/unknown_km` | km | Distance for unknown maintenance |
+| Service Maintenance | `service/canbus/maintenance/service_km` | km | Distance until next service (interval unknown) |
 | Speed | `service/canbus/speed` | km/h | Current vehicle speed |
 | Traction Control Plus | `service/canbus/traction_plus` | binary | Traction control active |
 | Fuel Consumption | `service/canbus/current_consumption` | l/100km | Current fuel consumption |
