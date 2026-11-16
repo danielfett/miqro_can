@@ -92,46 +92,46 @@ The UDP sender will periodically send the current speed value to the configured 
 
 ### MQTT Topics
 
-The service publishes CAN bus messages to MQTT topics under `service/canbus/`.
+The service publishes CAN bus messages to MQTT topics under `service/can/`.
 
 #### Published Topics
 
 | Data | MQTT Topic | Unit | Notes |
 |------|-----------|------|-------|
-| Door Status | `service/canbus/door/{front_left,front_right,side,back,any,all}` | binary | Door open/closed status |
-| Handbrake | `service/canbus/handbrake` | binary | Handbrake engaged |
-| Light | `service/canbus/light` | binary | Driving lights on/off |
-| Pitch Angle | `service/canbus/attitude/pitch` | ° | Vehicle pitch angle |
-| Roll Angle | `service/canbus/attitude/roll` | ° | Vehicle roll angle |
-| Outside Temperature | `service/canbus/temperature/outside` | °C | Ambient temperature |
-| Voltage | `service/canbus/voltage` | V | Battery voltage |
-| Seatbelt | `service/canbus/seatbelt_open` | binary | Driver seatbelt status |
-| Oil Change Maintenance | `service/canbus/maintenance/oil_change_km` | km | Distance until oil change |
-| Unknown Maintenance | `service/canbus/maintenance/unknown_km` | km | Distance for unknown maintenance |
-| Service Maintenance | `service/canbus/maintenance/service_km` | km | Distance until next service (interval unknown) |
-| Speed | `service/canbus/speed` | km/h | Current vehicle speed |
-| Traction Control Plus | `service/canbus/traction_plus` | binary | Traction control active |
-| Fuel Consumption | `service/canbus/current_consumption` | l/100km | Current fuel consumption, never below 2.0 — see [below](#current-fuel-consumption) |
-| Vehicle Stationary | `service/canbus/stationary` | binary | Vehicle standing still (below ~3.4 km/h), as signalled by the trip computer |
-| Total Distance | `service/canbus/overall_kilometers` | km | Total kilometers driven |
-| Fuel Range | `service/canbus/kilometers_remaining` | km | Kilometers remaining on fuel |
-| Distance Today / Trip | `service/canbus/{today,trip}/distance` | km | From the wheel counters. The day starts at 3:00; a trip ends after 15 min of ignition off and is reset when the next one starts |
-| Fuel Consumed Today / Trip | `service/canbus/{today,trip}/fuel_consumed` | L | Current consumption (l/100km) integrated over the distance; idling is not counted |
-| Fuel Consumed by Gauge Today / Trip | `service/canbus/{today,trip}/fuel_consumed_gauge` | L | Drop of the fuel gauge since the start, corrected for refuelling (steps of 1 % of the 90 L tank) |
-| Fuel Consumed Difference Today / Trip | `service/canbus/{today,trip}/fuel_consumed_difference` | L | Integrated minus gauge-based consumption |
-| Front Door Lock | `service/canbus/lock/front` | locked/unlocked | Front doors lock status |
-| Back Door Lock | `service/canbus/lock/back` | locked/unlocked | Back doors lock status |
-| All Doors Locked | `service/canbus/lock/all_locked` | binary | All doors locked status |
-| Lock Buttons | `service/canbus/lock/button/{close,front,back}` | press/release/long_press/double_press | Remote lock button presses |
-| Cruise Control Status | `service/canbus/cruise_control/status` | 0-2 | Cruise control state |
-| Cruise Control Button | `service/canbus/cruise_control/button_pressed` | binary | Cruise control button pressed |
-| Start-Stop Disabled | `service/canbus/start_stop/disabled` | binary | Start-stop disabled |
-| Reverse Gear | `service/canbus/reverse` | binary | Reverse gear engaged |
-| Coolant Temperature | `service/canbus/coolant_temperature` | °C | Engine coolant temperature, ~1 Hz |
-| Engine Speed | `service/canbus/engine_speed` | rpm | 32 rpm resolution, ~1 Hz |
-| Accelerator Pedal | `service/canbus/accelerator_pedal` | % | Averaged over ~1 s; 100 % = raw `0xFF`, full-throttle scaling not yet verified |
-| CAN Bus Active | `service/canbus/active` | binary | Bus connectivity status |
-| Ignition | `service/canbus/ignition` | binary | Ignition on/off |
+| Door Status | `service/can/door/{front_left,front_right,side,back,any,all}` | binary | Door open/closed status |
+| Handbrake | `service/can/handbrake` | binary | Handbrake engaged |
+| Light | `service/can/light` | binary | Driving lights on/off |
+| Pitch Angle | `service/can/attitude/pitch` | ° | Vehicle pitch angle |
+| Roll Angle | `service/can/attitude/roll` | ° | Vehicle roll angle |
+| Outside Temperature | `service/can/temperature/outside` | °C | Ambient temperature |
+| Voltage | `service/can/voltage` | V | Battery voltage |
+| Seatbelt | `service/can/seatbelt_open` | binary | Driver seatbelt status |
+| Oil Change Maintenance | `service/can/maintenance/oil_change_km` | km | Distance until oil change |
+| Unknown Maintenance | `service/can/maintenance/unknown_km` | km | Distance for unknown maintenance |
+| Service Maintenance | `service/can/maintenance/service_km` | km | Distance until next service (interval unknown) |
+| Speed | `service/can/speed` | km/h | Current vehicle speed |
+| Traction Control Plus | `service/can/traction_plus` | binary | Traction control active |
+| Fuel Consumption | `service/can/current_consumption` | l/100km | Current fuel consumption, never below 2.0 — see [below](#current-fuel-consumption) |
+| Vehicle Stationary | `service/can/stationary` | binary | Vehicle standing still (below ~3.4 km/h), as signalled by the trip computer |
+| Total Distance | `service/can/overall_kilometers` | km | Total kilometers driven |
+| Fuel Range | `service/can/kilometers_remaining` | km | Kilometers remaining on fuel |
+| Distance Today / Trip | `service/can/{today,trip}/distance` | km | From the wheel counters. The day starts at 3:00; a trip ends after 15 min of ignition off and is reset when the next one starts |
+| Fuel Consumed Today / Trip | `service/can/{today,trip}/fuel_consumed` | L | Current consumption (l/100km) integrated over the distance; idling is not counted |
+| Fuel Consumed by Gauge Today / Trip | `service/can/{today,trip}/fuel_consumed_gauge` | L | Drop of the fuel gauge since the start, corrected for refuelling (steps of 1 % of the 90 L tank) |
+| Fuel Consumed Difference Today / Trip | `service/can/{today,trip}/fuel_consumed_difference` | L | Integrated minus gauge-based consumption |
+| Front Door Lock | `service/can/lock/front` | locked/unlocked | Front doors lock status |
+| Back Door Lock | `service/can/lock/back` | locked/unlocked | Back doors lock status |
+| All Doors Locked | `service/can/lock/all_locked` | binary | All doors locked status |
+| Lock Buttons | `service/can/lock/button/{close,front,back}` | press/release/long_press/double_press | Remote lock button presses |
+| Cruise Control Status | `service/can/cruise_control/status` | 0-2 | Cruise control state |
+| Cruise Control Button | `service/can/cruise_control/button_pressed` | binary | Cruise control button pressed |
+| Start-Stop Disabled | `service/can/start_stop/disabled` | binary | Start-stop disabled |
+| Reverse Gear | `service/can/reverse` | binary | Reverse gear engaged |
+| Coolant Temperature | `service/can/coolant_temperature` | °C | Engine coolant temperature, ~1 Hz |
+| Engine Speed | `service/can/engine_speed` | rpm | 32 rpm resolution, ~1 Hz |
+| Accelerator Pedal | `service/can/accelerator_pedal` | % | Averaged over ~1 s; 100 % = raw `0xFF`, full-throttle scaling not yet verified |
+| CAN Bus Active | `service/can/active` | binary | Bus connectivity status |
+| Ignition | `service/can/ignition` | binary | Ignition on/off |
 
 #### Current Fuel Consumption
 
