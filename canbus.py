@@ -325,6 +325,11 @@ class CANService(miqro.Service):
             unit_of_measurement="l/100km",
             state_class="measurement",
         )
+        self.sensor_stationary = ha_sensors.BinarySensor(
+            self.device_car,
+            name="Fahrzeug steht",
+            state_topic_postfix="stationary",
+        )
         self.sensor_overall_kilometers = ha_sensors.Sensor(
             self.device_car,
             name="Gesamt-Kilometerstand",
@@ -619,10 +624,23 @@ class CANService(miqro.Service):
 
         self.last_ignition_signal_acquired = datetime.now()
 
+    CONSUMPTION_FLOOR = 2.0
+
     def handle_fuel(self, msg):
-        # first three nibbles represent current fuel consumption, as ints
-        some_number = float("%x.%x" % (msg.data[0], msg.data[1] >> 4))
-        self.publish("current_consumption", some_number, qos=self.QOS_AT_LEAST_ONCE)
+        # byte 4 bit 0x80: vehicle stationary (set below ~3.4 km/h, cleared
+        # above ~5 km/h). While set, the consumption field is frozen at its last
+        # value from driving; the instrument cluster ignores it and displays the
+        # floor value 2.0 instead (dashes with ignition off). Mirror the display.
+        stationary = 1 if (msg.data[4] & 0x80) else 0
+        self.publish("stationary", stationary, only_if_changed=True)
+
+        # first three nibbles represent current fuel consumption, BCD. Never
+        # below 2.0 - that value also covers overrun fuel cut-off (true 0).
+        if stationary:
+            consumption = self.CONSUMPTION_FLOOR
+        else:
+            consumption = float("%x.%x" % (msg.data[0], msg.data[1] >> 4))
+        self.publish("current_consumption", consumption, qos=self.QOS_AT_LEAST_ONCE)
 
         # next five nibbles are overall kilometers
         overall_kilometers = int(

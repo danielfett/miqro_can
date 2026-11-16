@@ -276,6 +276,7 @@ Byte 3 was a constant `0x50`.
 | Current consumption (l/100 km) | BCD: integer part `data[0]`, first decimal `data[1] >> 4` | 🟢 |
 | Total odometer (km) | `(data[1] & 0x0F) << 16 \| data[2] << 8 \| data[3]` | ✅ |
 | Range remaining (km) | `(data[4] & 0x0F) << 8 \| data[5]` | ✅ |
+| Stationary flag | `data[4] & 0x80` | 🟢 |
 
 The consumption field is read as *hex digits interpreted as decimal* (BCD), i.e. byte `0x12` means 12.
 
@@ -283,6 +284,15 @@ Odometer and range were re-verified in the same fill-up test: the odometer advan
 over a 36 km round trip, and range remaining went 65 → 840 km across the refuel.
 
 Note that **fuel level is not in this frame** — it is byte 5 of `0x06214000`.
+
+**Consumption floor and stationary flag** (two captures, 2026-11-15): the consumption field never
+goes below `0x20 0x0_` = 2.0 l/100 km. It sits at 2.0 during overrun fuel cut-off (injection value
+in `0x04214001` bytes 4–5 exactly 0) and while rolling at idle at 20–45 km/h, and rises again below
+~15 km/h. Bit `0x80` of byte 4 is set when speed drops below ~3.4 km/h and cleared above ~5 km/h;
+while it is set, the consumption field is frozen at its last driving value (14.9, 7.3, 8.4, 4.7 at
+the four stops observed — engine idling throughout, Start/Stop never intervened). The flag stays
+set after ignition off. Per the owner, the cluster displays 2.0 at standstill with ignition on and
+dashes with ignition off, i.e. it ignores the frozen value. 🟢
 
 ### `0x04394100` — Pitch and roll ✅
 

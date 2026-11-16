@@ -111,7 +111,8 @@ The service publishes CAN bus messages to MQTT topics under `service/canbus/`.
 | Service Maintenance | `service/canbus/maintenance/service_km` | km | Distance until next service (interval unknown) |
 | Speed | `service/canbus/speed` | km/h | Current vehicle speed |
 | Traction Control Plus | `service/canbus/traction_plus` | binary | Traction control active |
-| Fuel Consumption | `service/canbus/current_consumption` | l/100km | Current fuel consumption |
+| Fuel Consumption | `service/canbus/current_consumption` | l/100km | Current fuel consumption, never below 2.0 — see [below](#current-fuel-consumption) |
+| Vehicle Stationary | `service/canbus/stationary` | binary | Vehicle standing still (below ~3.4 km/h), as signalled by the trip computer |
 | Total Distance | `service/canbus/overall_kilometers` | km | Total kilometers driven |
 | Fuel Range | `service/canbus/kilometers_remaining` | km | Kilometers remaining on fuel |
 | Front Door Lock | `service/canbus/lock/front` | locked/unlocked | Front doors lock status |
@@ -122,5 +123,28 @@ The service publishes CAN bus messages to MQTT topics under `service/canbus/`.
 | Cruise Control Button | `service/canbus/cruise_control/button_pressed` | binary | Cruise control button pressed |
 | Start-Stop Disabled | `service/canbus/start_stop/disabled` | binary | Start-stop disabled |
 | Reverse Gear | `service/canbus/reverse` | binary | Reverse gear engaged |
+| Coolant Temperature | `service/canbus/coolant_temperature` | °C | Engine coolant temperature, ~1 Hz |
+| Engine Speed | `service/canbus/engine_speed` | rpm | 32 rpm resolution, ~1 Hz |
+| Accelerator Pedal | `service/canbus/accelerator_pedal` | % | Averaged over ~1 s; 100 % = raw `0xFF`, full-throttle scaling not yet verified |
 | CAN Bus Active | `service/canbus/active` | binary | Bus connectivity status |
 | Ignition | `service/canbus/ignition` | binary | Ignition on/off |
+
+#### Current Fuel Consumption
+
+The instantaneous consumption comes from the trip computer frame `0x0C054003` and behaves exactly
+like the value in the instrument cluster display:
+
+* **While driving** it is the current consumption in l/100 km, but **never below 2.0**. A value of
+  2.0 therefore means "2.0 or less" — it is shown during overrun fuel cut-off (true consumption 0)
+  and often while rolling towards a junction at idle.
+* **When the vehicle stands still** (below ~3.4 km/h; it resumes above ~5 km/h), the trip computer
+  sets a stationary flag (byte 4, bit `0x80`) and freezes the consumption field at its last value
+  from driving. The cluster ignores that stale value and displays **2.0**; this service does the
+  same and publishes 2.0. The flag itself is published as `stationary`.
+* **With ignition off** the cluster shows dashes. The frame keeps being sent for a while with the
+  stationary flag set, so the service keeps publishing 2.0; use the `ignition` topic to tell the
+  two cases apart.
+
+Since l/100 km is undefined at standstill and 2.0 is a display floor rather than a measurement,
+avoid averaging this sensor over time to estimate fuel use — use the fuel level or the range
+instead.
