@@ -288,10 +288,18 @@ class CANService(miqro.Service):
 
         self.sensor_engine_speed = ha_sensors.Sensor(
             self.device_car,
-            name="Drehzahl (unkalibriert)",
+            name="Drehzahl",
             state_topic_postfix="engine_speed",
             unit_of_measurement="rpm",
             state_class="measurement",
+        )
+        self.sensor_accelerator_pedal = ha_sensors.Sensor(
+            self.device_car,
+            name="Gaspedal",
+            state_topic_postfix="accelerator_pedal",
+            unit_of_measurement="%",
+            state_class="measurement",
+            icon="mdi:speedometer",
         )
 
         # fuel
@@ -479,6 +487,21 @@ class CANService(miqro.Service):
     def handle_attitude(self, msg):
         if not msg.data[0] and not msg.data[1]:
             return
+
+        # accelerator pedal (byte 3): 0 = released, raw 0..255. Mapped linearly
+        # to percent; whether 255 really is full throttle is not yet verified
+        # (max. observed so far: 184). Averaged and published at ~1 Hz.
+        self._pedal_samples.append(msg.data[3])
+        now = datetime.now()
+        if (
+            self._last_pedal_published is None
+            or now - self._last_pedal_published >= timedelta(seconds=1)
+        ):
+            pedal = sum(self._pedal_samples) / len(self._pedal_samples) / 255 * 100
+            self.publish("accelerator_pedal", round(pedal, 1), only_if_changed=True)
+            self._pedal_samples.clear()
+            self._last_pedal_published = now
+
         self.angle_pitch.append(((msg.data[0] << 4 | msg.data[1] >> 4) - 2**11) / 10)
         self.angle_roll.append((((msg.data[1] & 0xF) << 8 | msg.data[2]) - 2**11) / 10)
         self.last_attitude_acquired = datetime.now()
@@ -706,8 +729,10 @@ class CANService(miqro.Service):
         self.publish("reverse", reverse, only_if_changed=timedelta(seconds=5))
 
         # coolant temperature (byte 3): °C = value - 40
+        # (verified on a cold start: 15 °C at 9.5 °C outside, rising steadily)
         coolant_temp = msg.data[3] - 40
         # engine speed (byte 6): rpm = value * 32
+        # (cold idle ~830 rpm, warm idle ~736 rpm)
         engine_speed = msg.data[6] * 32
 
         # throttle to ~1 Hz
@@ -792,6 +817,8 @@ class CANService(miqro.Service):
         self._can_filters = list(self.CAN_IDS.values())
         self.bus = can_cls(self.can_channel, can_filters=self._can_filters)
         self.last_canbus_message_received = None
+        self._pedal_samples = []
+        self._last_pedal_published = None
         self.create_ha_sensors()
         self._init_udp_sender()
 
