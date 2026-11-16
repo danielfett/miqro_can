@@ -306,6 +306,26 @@ roll  = (((data[1] & 0x0F) << 8 | data[2]) - 2048) / 10
 Frames where bytes 0 and 1 are both zero are invalid and must be discarded. Useful for levelling a
 camper.
 
+**Sign convention** ✅ (two captures, 2026-11-15, plus a comparison against an independent IMU):
+
+| Signal | Positive when | Evidence |
+| --- | --- | --- |
+| Pitch | **front up** | Rises when accelerating: slope 0.87–0.88 against `atan(a_long / g)` from the speed signal, r = 0.83 / 0.95 |
+| Roll | **right side down** | Falls in right-hand curves: slope −0.75 against `atan(a_lat / g)` from the wheel distance counters in `0x04214006`, r = −0.76 / −0.88 |
+
+Turn direction was taken from the wheel distance counters: counter 1 (bytes 4–5) is the **left**
+wheel, as confirmed by the indicator flags in `0x02214000` (right indicator ⇒ counter 1 travels
+further). A right turn produces a rightward specific force, which an accelerometer reads like
+"right side up", hence the negative slope for a right-down-positive convention.
+
+The values behave like a plain accelerometer inclinometer: while driving they include longitudinal
+and lateral acceleration (excursions up to about ±14° observed), and at standstill with the engine
+running they jitter by roughly ±0.8°. Use them for levelling only at standstill and averaged.
+
+A cabin-mounted IMU on the same vehicle (3 drives in July 2026, 1 s bins) tracks both values with
+correlation +0.94…+0.98 at zero lag and a slope of about 1.09, i.e. same sign; the remaining
+differences are constant mounting offsets of that IMU, not a decoding issue.
+
 The remaining bytes:
 
 | Byte | Observation | Conf. |
