@@ -14,8 +14,111 @@ except ImportError:
     HAS_UDP_SENDER = False
 
 
+class ConsumptionPeriod:
+    """Distance and fuel accumulated over one period (a day or a trip).
+
+    Fuel is tracked twice so the two can be compared:
+
+      * integrated: the instantaneous consumption (l/100km) integrated over the
+        distance driven,
+      * gauge: the drop of the fuel gauge (1 % steps of the tank, ~0.9 L)
+        since the period started, corrected for refuelling.
+
+    Refuelling shows up as the gauge rising by at least REFUEL_THRESHOLD_L
+    above the lowest level seen. The level before refuelling closes the current
+    segment; a new segment starts from the refuelled level. The cluster may
+    ramp the gauge up slowly after refuelling, so for a while after a refuel the
+    segment start follows the gauge upwards.
+    """
+
+    REFUEL_THRESHOLD_L = 5
+    REFUEL_SETTLE_TIME = timedelta(minutes=5)
+    # bumped when the unit of the gauge values changes; saved gauge values of
+    # another version are discarded
+    GAUGE_VERSION = 2
+
+    def __init__(self, key, data=None):
+        data = data or {}
+        self.key = key
+        self.distance_m = data.get("distance_m", 0.0)
+        self.fuel_integrated_l = data.get("fuel_integrated_l", 0.0)
+        if data.get("gauge_version") != self.GAUGE_VERSION:
+            data = {}
+        self.gauge_closed_l = data.get("gauge_closed_l", 0)
+        self.gauge_segment_start_l = data.get("gauge_segment_start_l")
+        self.gauge_segment_low_l = data.get("gauge_segment_low_l")
+        self.gauge_current_l = data.get("gauge_current_l")
+        self.refuelled_at = data.get("refuelled_at")  # timestamp or None
+
+    def to_dict(self):
+        return {
+            "key": self.key,
+            "distance_m": self.distance_m,
+            "fuel_integrated_l": self.fuel_integrated_l,
+            "gauge_closed_l": self.gauge_closed_l,
+            "gauge_segment_start_l": self.gauge_segment_start_l,
+            "gauge_segment_low_l": self.gauge_segment_low_l,
+            "gauge_current_l": self.gauge_current_l,
+            "refuelled_at": self.refuelled_at,
+            "gauge_version": self.GAUGE_VERSION,
+        }
+
+    def add_distance(self, distance_m, consumption_l_per_100km):
+        self.distance_m += distance_m
+        if consumption_l_per_100km is not None:
+            self.fuel_integrated_l += (
+                distance_m / 1000 * consumption_l_per_100km / 100
+            )
+
+    def update_fuel_gauge(self, level_l, now):
+        if self.gauge_segment_start_l is None:
+            self.gauge_segment_start_l = level_l
+            self.gauge_segment_low_l = level_l
+        elif level_l >= self.gauge_segment_low_l + self.REFUEL_THRESHOLD_L:
+            self.gauge_closed_l += self.gauge_segment_start_l - self.gauge_segment_low_l
+            self.gauge_segment_start_l = level_l
+            self.gauge_segment_low_l = level_l
+            self.refuelled_at = now.timestamp()
+        else:
+            if (
+                self.refuelled_at is not None
+                and now.timestamp() - self.refuelled_at
+                < self.REFUEL_SETTLE_TIME.total_seconds()
+                and level_l > self.gauge_segment_start_l
+            ):
+                self.gauge_segment_start_l = level_l
+                self.gauge_segment_low_l = level_l
+            self.gauge_segment_low_l = min(self.gauge_segment_low_l, level_l)
+        self.gauge_current_l = level_l
+
+    @property
+    def fuel_gauge_l(self):
+        if self.gauge_segment_start_l is None:
+            return None
+        # + 0.0 turns a rounded -0.0 into 0.0
+        return round(
+            self.gauge_closed_l + self.gauge_segment_start_l - self.gauge_current_l,
+            1,
+        ) + 0.0
+
+    def values(self):
+        values = {
+            "distance": round(self.distance_m / 1000, 2),
+            "fuel_consumed": round(self.fuel_integrated_l, 2),
+        }
+        fuel_gauge = self.fuel_gauge_l
+        if fuel_gauge is not None:
+            values["fuel_consumed_gauge"] = fuel_gauge
+            # + 0.0 turns a rounded -0.0 into 0.0
+            values["fuel_consumed_difference"] = (
+                round(self.fuel_integrated_l - fuel_gauge, 2) + 0.0
+            )
+        return values
+
+
 class CANService(miqro.Service):
     SERVICE_NAME = "can"
+    USE_STATE_FILE = True
     CAN_CHANNEL = "can0"
     CAN_TIMEOUT = 0.005
 
@@ -45,6 +148,23 @@ class CANService(miqro.Service):
     CAN_ATTITUDE_MAX_DELAY = timedelta(seconds=0.2)
     CAN_ACTIVITY_TIMEOUT = timedelta(seconds=3)
     IGNITION_TIMEOUT = timedelta(seconds=3)
+
+    # wheel counters are 13 bit (~190 m); a longer gap between speed frames
+    # could hide a wrap-around, so the delta is discarded then
+    WHEEL_COUNTER_MAX_GAP = timedelta(seconds=1)
+    WHEEL_COUNTS_PER_M = 43.2
+    CONSUMPTION_MAX_AGE = timedelta(seconds=10)
+    FUEL_TANK_CAPACITY_L = 90  # Citroen Jumper 2020
+    DAY_START_HOUR = 3
+    TRIP_IGNITION_OFF_RESET = timedelta(minutes=15)
+    PERIOD_STATE_SAVE_INTERVAL = timedelta(seconds=60)
+
+    _odometry_last_counters = None
+    _odometry_last_time = None
+    _current_consumption = None
+    _current_consumption_time = None
+    _fuel_level_l = None
+    _period_state_saved = None
 
     def create_ha_sensors(self):
         device_config = self.service_config.get("device", {})
@@ -347,6 +467,47 @@ class CANService(miqro.Service):
             state_class="measurement",
         )
 
+        # calculated per day (from 3:00) and per trip
+
+        for period, label in (("today", "heute"), ("trip", "Fahrt")):
+            setattr(self, f"sensor_{period}_distance", ha_sensors.Sensor(
+                self.device_car,
+                name=f"Strecke {label}",
+                state_topic_postfix=f"{period}/distance",
+                unit_of_measurement="km",
+                device_class="distance",
+                state_class="total_increasing",
+                suggested_display_precision=1,
+            ))
+            setattr(self, f"sensor_{period}_fuel_consumed", ha_sensors.Sensor(
+                self.device_car,
+                name=f"Verbrauch {label}",
+                state_topic_postfix=f"{period}/fuel_consumed",
+                unit_of_measurement="L",
+                device_class="volume",
+                state_class="total_increasing",
+                suggested_display_precision=2,
+                icon="mdi:fuel",
+            ))
+            setattr(self, f"sensor_{period}_fuel_consumed_gauge", ha_sensors.Sensor(
+                self.device_car,
+                name=f"Verbrauch {label} (Tankanzeige)",
+                state_topic_postfix=f"{period}/fuel_consumed_gauge",
+                unit_of_measurement="L",
+                device_class="volume",
+                state_class="total",
+                icon="mdi:gauge",
+            ))
+            setattr(self, f"sensor_{period}_fuel_consumed_difference", ha_sensors.Sensor(
+                self.device_car,
+                name=f"Verbrauch {label} Differenz (berechnet - Tankanzeige)",
+                state_topic_postfix=f"{period}/fuel_consumed_difference",
+                unit_of_measurement="L",
+                state_class="measurement",
+                suggested_display_precision=2,
+                icon="mdi:delta",
+            ))
+
         # lock (front/back/all_locked)
 
         self.sensor_lock_front = ha_sensors.BinarySensor(
@@ -466,18 +627,26 @@ class CANService(miqro.Service):
         unknown = 1 if (msg.data[3] & 0x20) else 0
         self.publish("unknown_maybe_lock", unknown, only_if_changed=True)
 
-        # fuel level in litres (byte 5)
+        # fuel level in percent of the tank (byte 5), converted to litres
         # When the car is parked/shut down, the cluster sends zeroed frames.
-        # A real tank level of 0 L is not observable (the low-fuel warning kicks
+        # A real tank level of 0 is not observable (the low-fuel warning kicks
         # in long before), so treat 0 as "no reading" and keep the last value.
-        fuel_level = msg.data[5]
-        if fuel_level:
+        fuel_level_percent = msg.data[5]
+        if fuel_level_percent:
+            fuel_level = round(
+                fuel_level_percent * self.FUEL_TANK_CAPACITY_L / 100, 1
+            )
             self.publish(
                 "fuel_level",
                 fuel_level,
                 only_if_changed=timedelta(seconds=30),
                 retain=True,
             )
+            self._fuel_level_l = fuel_level
+            now = datetime.now()
+            self._roll_over_day(now)
+            self.period_today.update_fuel_gauge(fuel_level, now)
+            self.period_trip.update_fuel_gauge(fuel_level, now)
 
             # low-fuel warning lamp (byte 4, bit 1) - only trustworthy in the
             # same frames that carry a valid fuel level
@@ -622,7 +791,12 @@ class CANService(miqro.Service):
                     qos=self.QOS_AT_LEAST_ONCE,
                 )
 
-        self.last_ignition_signal_acquired = datetime.now()
+        now = datetime.now()
+        self._roll_over_day(now)
+        self._start_trip_if_needed(now)
+        self._accumulate_odometry(msg, now)
+
+        self.last_ignition_signal_acquired = now
 
     CONSUMPTION_FLOOR = 2.0
 
@@ -641,6 +815,8 @@ class CANService(miqro.Service):
         else:
             consumption = float("%x.%x" % (msg.data[0], msg.data[1] >> 4))
         self.publish("current_consumption", consumption, qos=self.QOS_AT_LEAST_ONCE)
+        self._current_consumption = consumption
+        self._current_consumption_time = datetime.now()
 
         # next five nibbles are overall kilometers
         overall_kilometers = int(
@@ -839,6 +1015,129 @@ class CANService(miqro.Service):
         self._last_pedal_published = None
         self.create_ha_sensors()
         self._init_udp_sender()
+        self._load_periods()
+
+    # calculated distance and fuel per day and per trip
+
+    def _day_key(self, now):
+        # the day starts at DAY_START_HOUR, so a late-night drive counts
+        # towards the day it started on
+        return (now - timedelta(hours=self.DAY_START_HOUR)).date().isoformat()
+
+    def _new_period(self, key):
+        period = ConsumptionPeriod(key)
+        # the gauge is only readable while the car is awake; start from the
+        # last level seen
+        if self._fuel_level_l is not None:
+            period.update_fuel_gauge(self._fuel_level_l, datetime.now())
+        return period
+
+    def _load_periods(self):
+        saved = self.state.get_path("periods", default={})
+        today = saved.get("today")
+        trip = saved.get("trip")
+        now = datetime.now()
+
+        # restore the last gauge level so new periods can start from it
+        for data in (today, trip):
+            if (
+                data
+                and data.get("gauge_version") == ConsumptionPeriod.GAUGE_VERSION
+                and data.get("gauge_current_l") is not None
+            ):
+                self._fuel_level_l = data["gauge_current_l"]
+
+        if today and today.get("key") == self._day_key(now):
+            self.period_today = ConsumptionPeriod(today["key"], today)
+        else:
+            self.period_today = self._new_period(self._day_key(now))
+
+        # the trip key is the timestamp of the last ignition signal
+        if trip:
+            self.period_trip = ConsumptionPeriod(trip.get("key"), trip)
+        else:
+            self.period_trip = self._new_period(None)
+
+    def _save_periods(self):
+        self.state.set_path(
+            "periods",
+            value={
+                "today": self.period_today.to_dict(),
+                "trip": self.period_trip.to_dict(),
+            },
+        )
+        self.state.save()
+        self._period_state_saved = datetime.now()
+
+    def _roll_over_day(self, now):
+        key = self._day_key(now)
+        if self.period_today.key != key:
+            self.log.info(f"New day {key}, resetting daily distance and fuel")
+            self.period_today = self._new_period(key)
+            self._save_periods()
+
+    def _start_trip_if_needed(self, now):
+        last_ignition = self.period_trip.key
+        if (
+            last_ignition is None
+            or now.timestamp() - last_ignition
+            >= self.TRIP_IGNITION_OFF_RESET.total_seconds()
+        ):
+            self.log.info("Ignition on after a long break, starting new trip")
+            self.period_trip = self._new_period(now.timestamp())
+            self._save_periods()
+        else:
+            self.period_trip.key = now.timestamp()
+
+    def _accumulate_odometry(self, msg, now):
+        # average of both wheel counters, independent of the manually started
+        # distance accumulation above
+        counters = (
+            (msg.data[4] << 8 | msg.data[5]) & 0x1FFF,
+            (msg.data[6] << 8 | msg.data[7]) & 0x1FFF,
+        )
+        last_counters = self._odometry_last_counters
+        last_time = self._odometry_last_time
+        self._odometry_last_counters = counters
+        self._odometry_last_time = now
+        if last_counters is None or now - last_time > self.WHEEL_COUNTER_MAX_GAP:
+            return
+
+        delta_counts = sum(
+            (c - last_c) & 0x1FFF for c, last_c in zip(counters, last_counters)
+        ) / len(counters)
+        if not delta_counts:
+            return
+        distance_m = delta_counts / self.WHEEL_COUNTS_PER_M
+
+        consumption = None
+        if (
+            self._current_consumption_time is not None
+            and now - self._current_consumption_time <= self.CONSUMPTION_MAX_AGE
+        ):
+            consumption = self._current_consumption
+
+        self.period_today.add_distance(distance_m, consumption)
+        self.period_trip.add_distance(distance_m, consumption)
+
+    @miqro.loop(seconds=5)
+    def publish_periods(self):
+        self._roll_over_day(datetime.now())
+        for name, period in (("today", self.period_today), ("trip", self.period_trip)):
+            self.publish_json_keys(
+                period.values(),
+                name,
+                retain=True,
+                qos=self.QOS_AT_LEAST_ONCE,
+                only_if_changed=timedelta(minutes=5),
+            )
+
+        if (
+            self._period_state_saved is None
+            or datetime.now() - self._period_state_saved
+            >= self.PERIOD_STATE_SAVE_INTERVAL
+        ):
+            self._save_periods()
 
     def _init_udp_sender(self):
         self.udp_sender = None

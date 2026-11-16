@@ -115,6 +115,10 @@ The service publishes CAN bus messages to MQTT topics under `service/canbus/`.
 | Vehicle Stationary | `service/canbus/stationary` | binary | Vehicle standing still (below ~3.4 km/h), as signalled by the trip computer |
 | Total Distance | `service/canbus/overall_kilometers` | km | Total kilometers driven |
 | Fuel Range | `service/canbus/kilometers_remaining` | km | Kilometers remaining on fuel |
+| Distance Today / Trip | `service/canbus/{today,trip}/distance` | km | From the wheel counters. The day starts at 3:00; a trip ends after 15 min of ignition off and is reset when the next one starts |
+| Fuel Consumed Today / Trip | `service/canbus/{today,trip}/fuel_consumed` | L | Current consumption (l/100km) integrated over the distance; idling is not counted |
+| Fuel Consumed by Gauge Today / Trip | `service/canbus/{today,trip}/fuel_consumed_gauge` | L | Drop of the fuel gauge since the start, corrected for refuelling (steps of 1 % of the 90 L tank) |
+| Fuel Consumed Difference Today / Trip | `service/canbus/{today,trip}/fuel_consumed_difference` | L | Integrated minus gauge-based consumption |
 | Front Door Lock | `service/canbus/lock/front` | locked/unlocked | Front doors lock status |
 | Back Door Lock | `service/canbus/lock/back` | locked/unlocked | Back doors lock status |
 | All Doors Locked | `service/canbus/lock/all_locked` | binary | All doors locked status |
