@@ -90,7 +90,7 @@ but the mapping of node numbers to modules has **not** been verified here.
 | `0x04214006` * | Speed, traction plus, two 43 200/km distance counters | ✅ / 🟢 |
 | `0x04294001` * | Byte 5 bit `0x40` tracks fuel state (see `0x06214000`) | 🟡 |
 | `0x04394000` | Speed (duplicate) + 10 m distance counter, DLC 4 | 🟢 |
-| `0x04394100` | Pitch / roll; byte 3 = accelerator pedal | ✅ / 🟢 |
+| `0x04394100` | Pitch / roll; byte 3 = accelerator pedal | ✅ |
 | `0x06214000` | Doors, handbrake, lights, ignition, lock | ✅ |
 | `0x0621401A` * | Seatbelt | 🟢 |
 | `0x06254000` | Service interval km | 🟢 |
@@ -330,7 +330,7 @@ The remaining bytes:
 
 | Byte | Observation | Conf. |
 | --- | --- | --- |
-| 3 | **Accelerator pedal position**, raw 0–255 (see below) | 🟢 |
+| 3 | **Accelerator pedal position**, raw 0–255 (see below) | ✅ |
 | 4 | Constant `0x04` | — |
 | 5 | Small values, 1–13, noisy | ❓ |
 | 6 | Alternates `0x01` / `0x81` — bit 7 is an alive/toggle flag | 🟢 |
@@ -346,8 +346,10 @@ The remaining bytes:
   `0x04214001` bytes 4–5 (r = 0.39 / 0.52), and *leads* that value by ≥ 1 s — i.e. it is the
   input, not a consequence.
 - Earlier: mean 57 at a steady 70 km/h, 160 at 103 km/h.
-- Highest value seen: 184 (hard acceleration to 85 km/h). Whether `0xFF` is full throttle is
-  **unverified** — a capture with one full-throttle stab would settle the scaling.
+- **Full scale verified** with two full-throttle captures (2026-11-17): the pedal has two end
+  stops. Flooring it gives a flat plateau at **253**; pushing past the detent (kickdown) steps to
+  **255**, and back to 253 on the way out. Nothing above 255 or wrapping was seen. The earlier
+  maximum of 184 was just a partial press.
 
 `canbus.py` publishes it as `raw / 255 * 100` %, averaged over ~1 s.
 

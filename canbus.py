@@ -662,9 +662,10 @@ class CANService(miqro.Service):
         if not msg.data[0] and not msg.data[1]:
             return
 
-        # accelerator pedal (byte 3): 0 = released, raw 0..255. Mapped linearly
-        # to percent; whether 255 really is full throttle is not yet verified
-        # (max. observed so far: 184). Averaged and published at ~1 Hz.
+        # accelerator pedal (byte 3): 0 = released, raw 0..255, mapped linearly
+        # to percent. Verified with full-throttle captures: the pedal has two
+        # end stops, 253 at the floor and 255 when pushed past the detent
+        # (kickdown). Averaged and published at ~1 Hz.
         self._pedal_samples.append(msg.data[3])
         now = datetime.now()
         if (

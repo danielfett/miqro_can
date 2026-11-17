@@ -129,7 +129,7 @@ The service publishes CAN bus messages to MQTT topics under `service/can/`.
 | Reverse Gear | `service/can/reverse` | binary | Reverse gear engaged |
 | Coolant Temperature | `service/can/coolant_temperature` | °C | Engine coolant temperature, ~1 Hz |
 | Engine Speed | `service/can/engine_speed` | rpm | 32 rpm resolution, ~1 Hz |
-| Accelerator Pedal | `service/can/accelerator_pedal` | % | Averaged over ~1 s; 100 % = raw `0xFF`, full-throttle scaling not yet verified |
+| Accelerator Pedal | `service/can/accelerator_pedal` | % | Averaged over ~1 s; 100 % = raw `0xFF` (kickdown); flooring the pedal without kickdown reads ~99 % |
 | CAN Bus Active | `service/can/active` | binary | Bus connectivity status |
 | Ignition | `service/can/ignition` | binary | Ignition on/off |
 
