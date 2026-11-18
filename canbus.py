@@ -116,6 +116,47 @@ class ConsumptionPeriod:
         return values
 
 
+class ParkingDetector:
+    """Guesses whether the vehicle is being parked or manoeuvred right now
+    (pulling onto a pitch, levelling with wedges, leaving it again), as
+    opposed to driving on the road or being parked with the ignition off.
+
+    With the ignition on it turns on
+    - as soon as reverse gear is engaged,
+    - when the vehicle is slow (<= slow_kmh) and has not been fast
+      (> fast_kmh) for settle_time, or not at all since the ignition came on
+      (pulling out of a parking spot);
+    and turns off again above fast_kmh or when the ignition goes off. Between
+    the two speeds the state is kept, so manoeuvring at walking pace does not
+    flicker. A long stop at traffic lights or in a jam can look like parking;
+    that is the price of not needing a map.
+    """
+
+    def __init__(self, slow_kmh=10, fast_kmh=25, settle_time=timedelta(seconds=60)):
+        self.slow_kmh = slow_kmh
+        self.fast_kmh = fast_kmh
+        self.settle_time = settle_time
+        self.state = False
+        self.last_fast = None
+
+    def update(self, now, ignition, speed_kmh, reverse):
+        if not ignition:
+            self.state = False
+            self.last_fast = None
+            return self.state
+        speed = speed_kmh or 0.0  # no speed frames: standing
+        if speed > self.fast_kmh:
+            self.last_fast = now
+            self.state = False
+        elif reverse:
+            self.state = True
+        elif speed <= self.slow_kmh and (
+            self.last_fast is None or now - self.last_fast >= self.settle_time
+        ):
+            self.state = True
+        return self.state
+
+
 class CANService(miqro.Service):
     SERVICE_NAME = "can"
     USE_STATE_FILE = True
@@ -148,6 +189,8 @@ class CANService(miqro.Service):
     CAN_ATTITUDE_MAX_DELAY = timedelta(seconds=0.2)
     CAN_ACTIVITY_TIMEOUT = timedelta(seconds=3)
     IGNITION_TIMEOUT = timedelta(seconds=3)
+    SPEED_MAX_AGE = timedelta(seconds=3)
+    REVERSE_MAX_AGE = timedelta(seconds=3)
 
     # wheel counters are 13 bit (~190 m); a longer gap between speed frames
     # could hide a wrap-around, so the delta is discarded then
@@ -630,6 +673,14 @@ class CANService(miqro.Service):
             state_topic_postfix="ignition",
             device_class="power",
         )
+        # computed, see ParkingDetector
+        self.sensor_parking_likely = ha_sensors.BinarySensor(
+            self.ha_driving,
+            name="Parkvorgang wahrscheinlich",
+            default_entity_id="binary_sensor.parkvorgang_wahrscheinlich",
+            state_topic_postfix="parking_likely",
+            icon="mdi:car-brake-parking",
+        )
 
     def handle_door_vehicle_status(self, msg):
         door_status_byte = msg.data[1]
@@ -793,6 +844,7 @@ class CANService(miqro.Service):
         self.send_speed_via_udp(speed)
 
         self.speed.append(speed)
+        self._last_speed = (speed, datetime.now())
         self.publish("speed", speed, qos=self.QOS_AT_LEAST_ONCE)
 
         # distance counters (bytes 4-7): two 13-bit wheel accumulators (left and right)
@@ -955,6 +1007,7 @@ class CANService(miqro.Service):
     def handle_reverse(self, msg):
         # last nibble is 4 if reverse gear is engaged, 0 otherwise
         reverse = 1 if (msg.data[7] == 0x04) else 0
+        self._last_reverse = (bool(reverse), datetime.now())
         self.publish("reverse", reverse, only_if_changed=timedelta(seconds=5))
 
         # coolant temperature (byte 3): °C = value - 40
@@ -1048,6 +1101,14 @@ class CANService(miqro.Service):
         self.last_canbus_message_received = None
         self._pedal_samples = []
         self._last_pedal_published = None
+        self._last_speed = None  # (km/h, datetime)
+        self._last_reverse = None  # (bool, datetime)
+        parking_config = self.service_config.get("parking", {})
+        self.parking = ParkingDetector(
+            slow_kmh=parking_config.get("slow_kmh", 10),
+            fast_kmh=parking_config.get("fast_kmh", 25),
+            settle_time=timedelta(seconds=parking_config.get("settle_seconds", 60)),
+        )
         self.create_ha_sensors()
         self._init_udp_sender()
         self._load_periods()
@@ -1285,6 +1346,24 @@ class CANService(miqro.Service):
             "slow/speed", sum(self.speed) / len(self.speed), only_if_changed=False
         )
 
+    def publish_parking(self, ignition, now=None):
+        now = now or datetime.now()
+        speed = None
+        if self._last_speed is not None and now - self._last_speed[1] <= self.SPEED_MAX_AGE:
+            speed = self._last_speed[0]
+        reverse = (
+            self._last_reverse is not None
+            and self._last_reverse[0]
+            and now - self._last_reverse[1] <= self.REVERSE_MAX_AGE
+        )
+        parking = self.parking.update(now, ignition, speed, reverse)
+        self.publish(
+            "parking_likely",
+            1 if parking else 0,
+            qos=self.QOS_AT_LEAST_ONCE,
+            only_if_changed=timedelta(seconds=60),
+        )
+
     @miqro.loop(seconds=1)
     def publish_activity(self):
         if (
@@ -1306,6 +1385,7 @@ class CANService(miqro.Service):
         else:
             ignition = 1
         self.publish("ignition", ignition, only_if_changed=timedelta(seconds=60))
+        self.publish_parking(bool(ignition))
 
         # auto-disable distance accumulation if CAN is unavailable for >1 minute
         if self.distance_accumulation_enabled and (

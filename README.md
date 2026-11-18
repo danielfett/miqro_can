@@ -96,7 +96,7 @@ The configured device (e.g. "Basisfahrzeug") holds the main values: ignition,
 stationary, speed, odometer, fuel level and warning, range, voltage, outside
 temperature, CAN bus activity. The other entities are grouped in child devices
 (Home Assistant 2026.11+): *Türen & Schloss*, *Fahrbetrieb*, *Strecke & Verbrauch*,
-*Wartung* and *CAN-Log*. They keep the unique IDs they had on the main device,
+*Wartung* and *CAN-Log*. *Fahrbetrieb* also has the computed `binary_sensor.parkvorgang_wahrscheinlich`. They keep the unique IDs they had on the main device,
 so entity IDs and history are unchanged. Other services can add their own
 children to the same device by using one of its identifiers.
 
@@ -142,6 +142,7 @@ The service publishes CAN bus messages to MQTT topics under `service/can/`.
 | Accelerator Pedal | `service/can/accelerator_pedal` | % | Averaged over ~1 s; 100 % = raw `0xFF` (kickdown); flooring the pedal without kickdown reads ~99 % |
 | CAN Bus Active | `service/can/active` | binary | Bus connectivity status |
 | Ignition | `service/can/ignition` | binary | Ignition on/off |
+| Parking likely | `service/can/parking_likely` | binary | Computed: ignition on and probably parking or manoeuvring (reverse gear, or ≤ 10 km/h without having been above 25 km/h for 60 s or since the ignition came on; off above 25 km/h or with ignition off). Thresholds: `parking.slow_kmh`, `fast_kmh`, `settle_seconds` |
 
 #### Current Fuel Consumption
 
