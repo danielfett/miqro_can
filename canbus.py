@@ -180,51 +180,65 @@ class CANService(miqro.Service):
             manufacturer=device_manufacturer,
             identifiers=device_identifiers,
         )
+        # Parts shown as child devices in Home Assistant (2026.11+). The
+        # entities were on the main device before and keep their unique IDs
+        # (and entity IDs) from there. Home Assistant puts the child's name in
+        # front of the entity names.
+        def child(name):
+            return ha_sensors.ChildDevice(
+                self.device_car, name=name, keep_parent_unique_ids=True
+            )
+
+        self.ha_doors = child("Türen & Schloss")
+        self.ha_driving = child("Fahrbetrieb")
+        self.ha_trip = child("Strecke & Verbrauch")
+        self.ha_maintenance = child("Wartung")
+        self.ha_can_log = child("CAN-Log")
 
         self.sensor_door_front_left = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_doors,
             name="Tür vorne links",
             state_topic_postfix="door/front_left",
             device_class="door",
         )
         self.sensor_door_front_right = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_doors,
             name="Tür vorne rechts",
             state_topic_postfix="door/front_right",
             device_class="door",
         )
         self.sensor_door_side = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_doors,
             name="Schiebetür",
             state_topic_postfix="door/side",
             device_class="door",
         )
         self.sensor_door_back = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_doors,
             name="Hecktür",
             state_topic_postfix="door/back",
             device_class="door",
         )
         self.sensor_door_any = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_doors,
             name="Irgendeine Tür",
             state_topic_postfix="door/any",
             device_class="door",
         )
         self.sensor_door_all = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_doors,
             name="Alle Türen",
             state_topic_postfix="door/all",
             device_class="door",
         )
         self.sensor_handbrake = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_driving,
             name="Handbremse",
             state_topic_postfix="handbrake",
             device_class="safety",
         )
         self.sensor_light = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_driving,
             name="Fahrlicht",
             state_topic_postfix="light",
             device_class="light",
@@ -233,14 +247,14 @@ class CANService(miqro.Service):
         # attitude
 
         self.sensor_attitude_pitch = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_driving,
             name="Nickwinkel",
             state_topic_postfix="attitude/pitch",
             unit_of_measurement="°",
             state_class="measurement",
         )
         self.sensor_attitude_roll = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_driving,
             name="Rollwinkel",
             state_topic_postfix="attitude/roll",
             unit_of_measurement="°",
@@ -258,7 +272,7 @@ class CANService(miqro.Service):
             state_class="measurement",
         )
         self.sensor_temperature_unknown = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_driving,
             name="Temperatur (unbekannt)",
             state_topic_postfix="temperature/unknown",
             unit_of_measurement="°C",
@@ -266,7 +280,7 @@ class CANService(miqro.Service):
             state_class="measurement",
         )
         self.sensor_coolant_temperature = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_driving,
             name="Kühlmitteltemperatur",
             state_topic_postfix="coolant_temperature",
             unit_of_measurement="°C",
@@ -288,7 +302,7 @@ class CANService(miqro.Service):
         # seatbelt
 
         self.sensor_seatbelt_open = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_driving,
             name="Sicherheitsgurt offen (Fahrersitz)",
             state_topic_postfix="seatbelt_open",
             device_class="safety",
@@ -297,20 +311,26 @@ class CANService(miqro.Service):
         # maintenance
 
         self.sensor_maintenance_oil_change_km = ha_sensors.Sensor(
-            self.device_car,
-            name="Wartung: Ölwechsel in km",
+            self.ha_maintenance,
+            name="Ölwechsel fällig in",
+            # was "Wartung: Ölwechsel in km" on the main device; keeps unique ID and entity ID
+            default_entity_id="sensor.Wartung---lwechsel-in-km",
             state_topic_postfix="maintenance/oil_change_km",
             unit_of_measurement="km",
         )
         self.sensor_maintenance_unknown_km = ha_sensors.Sensor(
-            self.device_car,
-            name="Wartung: Unbekannt in km",
+            self.ha_maintenance,
+            name="Unbekannt fällig in",
+            # was "Wartung: Unbekannt in km" on the main device; keeps unique ID and entity ID
+            default_entity_id="sensor.Wartung--Unbekannt-in-km",
             state_topic_postfix="maintenance/unknown_km",
             unit_of_measurement="km",
         )
         self.sensor_maintenance_service_km = ha_sensors.Sensor(
-            self.device_car,
-            name="Wartung: Service in km",
+            self.ha_maintenance,
+            name="Service fällig in",
+            # was "Wartung: Service in km" on the main device; keeps unique ID and entity ID
+            default_entity_id="sensor.Wartung--Service-in-km",
             state_topic_postfix="maintenance/service_km",
             unit_of_measurement="km",
         )
@@ -327,35 +347,37 @@ class CANService(miqro.Service):
         )
 
         self.sensor_traction_plus = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_driving,
             name="Traktionskontrolle Plus aktiviert",
             state_topic_postfix="traction_plus",
             device_class="safety",
         )
 
         self.sensor_distance_left = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_trip,
             name="Strecke links (akkumuliert)",
+            entity_category="diagnostic",
             state_topic_postfix="distance_left",
             unit_of_measurement="cm",
             state_class="total_increasing",
         )
         self.sensor_distance_right = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_trip,
             name="Strecke rechts (akkumuliert)",
+            entity_category="diagnostic",
             state_topic_postfix="distance_right",
             unit_of_measurement="cm",
             state_class="total_increasing",
         )
         self.button_distance_accumulation = ha_sensors.Button(
-            self.device_car,
+            self.ha_trip,
             name="Streckenmessung starten",
             command_topic_postfix="distance_accumulation/start",
             command_callback=self.handle_distance_accumulation_button,
             icon="mdi:map-marker-distance",
         )
         self.sensor_distance_accumulation_active = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_trip,
             name="Streckenmessung aktiv",
             state_topic_postfix="distance_accumulation/active",
             device_class="running",
@@ -364,42 +386,54 @@ class CANService(miqro.Service):
         # CAN bus recording
 
         self.button_can_log_10s = ha_sensors.Button(
-            self.device_car,
-            name="CAN-Log 10 Sekunden",
+            self.ha_can_log,
+            name="10 Sekunden aufzeichnen",
+            # was "CAN-Log 10 Sekunden" on the main device; keeps unique ID and entity ID
+            default_entity_id="button.CAN-Log-10-Sekunden",
             command_topic_postfix="can_log/record_10s",
             command_callback=self.handle_can_log_10s,
             icon="mdi:record-rec",
         )
         self.button_can_log_60s = ha_sensors.Button(
-            self.device_car,
-            name="CAN-Log 60 Sekunden",
+            self.ha_can_log,
+            name="60 Sekunden aufzeichnen",
+            # was "CAN-Log 60 Sekunden" on the main device; keeps unique ID and entity ID
+            default_entity_id="button.CAN-Log-60-Sekunden",
             command_topic_postfix="can_log/record_60s",
             command_callback=self.handle_can_log_60s,
             icon="mdi:record-rec",
         )
         self.button_can_log_5min = ha_sensors.Button(
-            self.device_car,
-            name="CAN-Log 5 Minuten",
+            self.ha_can_log,
+            name="5 Minuten aufzeichnen",
+            # was "CAN-Log 5 Minuten" on the main device; keeps unique ID and entity ID
+            default_entity_id="button.CAN-Log-5-Minuten",
             command_topic_postfix="can_log/record_5min",
             command_callback=self.handle_can_log_5min,
             icon="mdi:record-rec",
         )
         self.button_can_log_cancel = ha_sensors.Button(
-            self.device_car,
-            name="CAN-Log abbrechen",
+            self.ha_can_log,
+            name="Abbrechen",
+            # was "CAN-Log abbrechen" on the main device; keeps unique ID and entity ID
+            default_entity_id="button.CAN-Log-abbrechen",
             command_topic_postfix="can_log/cancel",
             command_callback=self.handle_can_log_cancel,
             icon="mdi:stop",
         )
         self.sensor_can_log_status = ha_sensors.Sensor(
-            self.device_car,
-            name="CAN-Log Status",
+            self.ha_can_log,
+            name="Status",
+            # was "CAN-Log Status" on the main device; keeps unique ID and entity ID
+            default_entity_id="sensor.CAN-Log-Status",
             state_topic_postfix="can_log/status",
             icon="mdi:file-document-outline",
         )
         self.sensor_can_log_file = ha_sensors.Sensor(
-            self.device_car,
-            name="CAN-Log Datei",
+            self.ha_can_log,
+            name="Datei",
+            # was "CAN-Log Datei" on the main device; keeps unique ID and entity ID
+            default_entity_id="sensor.CAN-Log-Datei",
             state_topic_postfix="can_log/file",
             icon="mdi:file-outline",
         )
@@ -407,14 +441,14 @@ class CANService(miqro.Service):
         # engine
 
         self.sensor_engine_speed = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_driving,
             name="Drehzahl",
             state_topic_postfix="engine_speed",
             unit_of_measurement="rpm",
             state_class="measurement",
         )
         self.sensor_accelerator_pedal = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_driving,
             name="Gaspedal",
             state_topic_postfix="accelerator_pedal",
             unit_of_measurement="%",
@@ -439,7 +473,7 @@ class CANService(miqro.Service):
         )
 
         self.sensor_current_consumption = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_trip,
             name="Aktueller Verbrauch",
             state_topic_postfix="current_consumption",
             unit_of_measurement="l/100km",
@@ -471,7 +505,7 @@ class CANService(miqro.Service):
 
         for period, label in (("today", "heute"), ("trip", "Fahrt")):
             setattr(self, f"sensor_{period}_distance", ha_sensors.Sensor(
-                self.device_car,
+                self.ha_trip,
                 name=f"Strecke {label}",
                 state_topic_postfix=f"{period}/distance",
                 unit_of_measurement="km",
@@ -480,7 +514,7 @@ class CANService(miqro.Service):
                 suggested_display_precision=1,
             ))
             setattr(self, f"sensor_{period}_fuel_consumed", ha_sensors.Sensor(
-                self.device_car,
+                self.ha_trip,
                 name=f"Verbrauch {label}",
                 state_topic_postfix=f"{period}/fuel_consumed",
                 unit_of_measurement="L",
@@ -490,7 +524,7 @@ class CANService(miqro.Service):
                 icon="mdi:fuel",
             ))
             setattr(self, f"sensor_{period}_fuel_consumed_gauge", ha_sensors.Sensor(
-                self.device_car,
+                self.ha_trip,
                 name=f"Verbrauch {label} (Tankanzeige)",
                 state_topic_postfix=f"{period}/fuel_consumed_gauge",
                 unit_of_measurement="L",
@@ -499,7 +533,7 @@ class CANService(miqro.Service):
                 icon="mdi:gauge",
             ))
             setattr(self, f"sensor_{period}_fuel_consumed_difference", ha_sensors.Sensor(
-                self.device_car,
+                self.ha_trip,
                 name=f"Verbrauch {label} Differenz (berechnet - Tankanzeige)",
                 state_topic_postfix=f"{period}/fuel_consumed_difference",
                 unit_of_measurement="L",
@@ -511,7 +545,7 @@ class CANService(miqro.Service):
         # lock (front/back/all_locked)
 
         self.sensor_lock_front = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_doors,
             name="Vordertüren Verriegelungsstatus",
             state_topic_postfix="lock/front",
             device_class="lock",
@@ -519,7 +553,7 @@ class CANService(miqro.Service):
             payload_off="locked",
         )
         self.sensor_lock_back = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_doors,
             name="Hecktüren Verriegelungsstatus",
             state_topic_postfix="lock/back",
             device_class="lock",
@@ -527,7 +561,7 @@ class CANService(miqro.Service):
             payload_off="locked",
         )
         self.sensor_lock_all_locked = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_doors,
             name="Alle Türen verriegelt",
             state_topic_postfix="lock/all_locked",
             device_class="lock",
@@ -538,21 +572,21 @@ class CANService(miqro.Service):
         # lock button events
 
         self.event_lock_button_close = ha_sensors.Event(
-            self.device_car,
+            self.ha_doors,
             name="Fernbedienung Schließ-Knopf",
             state_topic_postfix="lock/button/close",
             event_types=["press", "long_press", "double_press", "release"],
             value_template="""{"event_type": "{{ value }}"}""",
         )
         self.event_lock_button_front = ha_sensors.Event(
-            self.device_car,
+            self.ha_doors,
             name="Fernbedienung Vordertüren-Knopf",
             state_topic_postfix="lock/button/front",
             event_types=["press", "long_press", "double_press", "release"],
             value_template="""{"event_type": "{{ value }}"}""",
         )
         self.event_lock_button_back = ha_sensors.Event(
-            self.device_car,
+            self.ha_doors,
             name="Fernbedienung Hecktüren-Knopf",
             state_topic_postfix="lock/button/back",
             event_types=["press", "long_press", "double_press", "release"],
@@ -562,12 +596,12 @@ class CANService(miqro.Service):
         # cruise control
 
         self.sensor_cruise_control_status = ha_sensors.Sensor(
-            self.device_car,
+            self.ha_driving,
             name="Tempomat Status",
             state_topic_postfix="cruise_control/status",
         )
         self.sensor_cruise_control_button_pressed = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_driving,
             name="Tempomat Knopf gedrückt",
             state_topic_postfix="cruise_control/button_pressed",
             device_class="safety",
@@ -576,7 +610,7 @@ class CANService(miqro.Service):
         # reverse
 
         self.sensor_reverse = ha_sensors.BinarySensor(
-            self.device_car,
+            self.ha_driving,
             name="Rückwärtsgang eingelegt",
             state_topic_postfix="reverse",
             device_class="safety",

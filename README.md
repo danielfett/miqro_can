@@ -90,6 +90,16 @@ services:
 
 The UDP sender will periodically send the current speed value to the configured ESPHome device(s). If the `esphome-udp-sender` package is not installed, the service will continue to work normally with UDP sending simply disabled.
 
+### Home Assistant devices
+
+The configured device (e.g. "Basisfahrzeug") holds the main values: ignition,
+stationary, speed, odometer, fuel level and warning, range, voltage, outside
+temperature, CAN bus activity. The other entities are grouped in child devices
+(Home Assistant 2026.11+): *Türen & Schloss*, *Fahrbetrieb*, *Strecke & Verbrauch*,
+*Wartung* and *CAN-Log*. They keep the unique IDs they had on the main device,
+so entity IDs and history are unchanged. Other services can add their own
+children to the same device by using one of its identifiers.
+
 ### MQTT Topics
 
 The service publishes CAN bus messages to MQTT topics under `service/can/`.
